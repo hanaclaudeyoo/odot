@@ -20,6 +20,21 @@ def client(tmp_path, monkeypatch):
         yield test_client
 
 
+def deadline_for_urgency(urgency: float, reference_time: datetime) -> str | None:
+    """Inverse of the rubric: the deadline that yields the given urgency."""
+    import app.main as main
+
+    if urgency <= main.NO_DEADLINE_URGENCY:
+        return None
+    anchors = main.URGENCY_ANCHORS
+    for (earlier_hours, earlier_urgency), (later_hours, later_urgency) in zip(anchors, anchors[1:]):
+        if urgency >= later_urgency:
+            position = (urgency - earlier_urgency) / (later_urgency - earlier_urgency)
+            hours = earlier_hours + (later_hours - earlier_hours) * position
+            return (reference_time + timedelta(hours=hours)).isoformat()
+    return None
+
+
 def create_task(
     client: TestClient,
     title: str,
@@ -32,12 +47,14 @@ def create_task(
     payload = {
         "title": title,
         "importance": importance,
-        "urgency": urgency,
         "difficulty": difficulty,
         "time_estimate_minutes": 30,
     }
     if category_id is not None:
         payload["category_id"] = category_id
+    # Urgency is deadline-only now, so express the requested urgency as a deadline.
+    if deadline_at is None:
+        deadline_at = deadline_for_urgency(urgency, datetime.now(timezone.utc))
     if deadline_at is not None:
         payload["deadline_at"] = deadline_at
     response = client.post(
@@ -60,7 +77,6 @@ def test_create_task_requires_valid_axes(client):
         json={
             "title": "Invalid task",
             "importance": 10.01,
-            "urgency": 3,
             "difficulty": 2,
             "time_estimate_minutes": 15,
         },
@@ -73,12 +89,40 @@ def test_create_task_accepts_decimal_axes(client):
     task = create_task(client, "Decimal task", 5.67, 4.32, 8.91)
 
     assert task["importance"] == 5.67
-    assert task["urgency"] == 4.32
-    assert task["base_urgency"] == 4.32
     assert task["difficulty"] == 8.91
 
 
-def test_task_deadline_is_stored_and_raises_effective_urgency(client, monkeypatch):
+def test_manual_urgency_is_rejected(client):
+    response = client.post(
+        "/tasks",
+        json={
+            "title": "Manual urgency",
+            "importance": 5,
+            "urgency": 7,
+            "difficulty": 5,
+            "time_estimate_minutes": 15,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_manual_urgency_is_rejected_on_update(client):
+    task = create_task(client, "No manual urgency", 5, 5, 3)
+
+    response = client.patch(f"/tasks/{task['id']}", json={"urgency": 9})
+
+    assert response.status_code == 422
+
+
+def test_task_without_deadline_is_not_due_soon(client):
+    task = create_task(client, "No deadline", 8, 0, 4)
+
+    assert task["deadline_at"] is None
+    assert task["urgency"] == 1
+
+
+def test_task_deadline_is_stored_and_drives_urgency(client, monkeypatch):
     import app.main as main
 
     current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
@@ -94,12 +138,96 @@ def test_task_deadline_is_stored_and_raises_effective_urgency(client, monkeypatc
     )
 
     assert task["deadline_at"] == (current_time + timedelta(hours=24)).isoformat()
-    assert task["base_urgency"] == 2
-    assert task["urgency"] > 2
-    assert task["urgency"] <= 10
+    assert task["urgency"] == 7
 
 
-def test_completed_task_uses_base_urgency_after_deadline(client, monkeypatch):
+@pytest.mark.parametrize(
+    "hours_until_deadline, expected_urgency",
+    [
+        (-1, 10),
+        (0, 10),
+        (3, 9),
+        (12, 8),
+        (24, 7),
+        (72, 6),
+        (168, 5),
+        (336, 4),
+        (720, 3),
+        (1440, 2),
+        (2160, 1),
+        (9000, 1),
+    ],
+)
+def test_deadline_urgency_matches_rubric_anchors(hours_until_deadline, expected_urgency):
+    import app.main as main
+
+    assert main.deadline_urgency(hours_until_deadline) == expected_urgency
+
+
+def test_deadline_urgency_decreases_as_deadline_recedes():
+    import app.main as main
+
+    urgencies = [main.deadline_urgency(hours) for hours in range(0, 2400, 6)]
+    assert all(
+        later <= earlier for earlier, later in zip(urgencies, urgencies[1:])
+    )
+    assert min(urgencies) >= 1
+    assert max(urgencies) <= 10
+
+
+def test_deadline_tomorrow_sets_urgency_to_seven(client, monkeypatch):
+    import app.main as main
+
+    current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "now_utc", lambda: current_time)
+
+    task = create_task(
+        client,
+        "Due tomorrow",
+        10,
+        2,
+        10,
+        deadline_at=(current_time + timedelta(hours=24)).isoformat(),
+    )
+
+    assert task["urgency"] == 7
+
+
+def test_clearing_deadline_returns_task_to_not_due_soon(client, monkeypatch):
+    import app.main as main
+
+    current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "now_utc", lambda: current_time)
+
+    task = create_task(
+        client,
+        "Deadline then cleared",
+        5,
+        4,
+        5,
+        deadline_at=(current_time + timedelta(hours=3)).isoformat(),
+    )
+    assert task["urgency"] == 9
+
+    cleared = client.patch(f"/tasks/{task['id']}", json={"deadline_at": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["urgency"] == 1
+
+
+def test_deadline_urgency_ignores_difficulty_and_importance(client, monkeypatch):
+    import app.main as main
+
+    current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "now_utc", lambda: current_time)
+    deadline_at = (current_time + timedelta(hours=24)).isoformat()
+
+    easy = create_task(client, "Easy", 1, 0, 1, deadline_at=deadline_at)
+    hard = create_task(client, "Hard", 10, 0, 10, deadline_at=deadline_at)
+
+    assert easy["urgency"] == hard["urgency"] == 7
+
+
+def test_archived_task_freezes_urgency_at_archive_time(client, monkeypatch):
     import app.main as main
 
     current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
@@ -110,16 +238,16 @@ def test_completed_task_uses_base_urgency_after_deadline(client, monkeypatch):
         10,
         2,
         10,
-        deadline_at=(current_time + timedelta(minutes=10)).isoformat(),
+        deadline_at=(current_time + timedelta(hours=24)).isoformat(),
     )
     client.post(f"/tasks/{task['id']}/start")
     client.post(f"/tasks/{task['id']}/finish")
 
-    monkeypatch.setattr(main, "now_utc", lambda: current_time + timedelta(days=1))
+    # Long after the deadline has passed, the archived task still reads as it did on finish.
+    monkeypatch.setattr(main, "now_utc", lambda: current_time + timedelta(days=30))
     archived = client.get("/tasks?status=archived").json()[0]
 
-    assert archived["base_urgency"] == 2
-    assert archived["urgency"] == 2
+    assert archived["urgency"] == 7
 
 
 def test_lists_active_and_archived_tasks(client):

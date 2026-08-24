@@ -23,7 +23,6 @@ type Task = {
   title: string;
   importance: number;
   urgency: number;
-  base_urgency: number;
   difficulty: number;
   time_estimate_minutes: number;
   deadline_at: string | null;
@@ -53,7 +52,6 @@ type TaskDraft = {
   title: string;
   category_id: number | null;
   importance: number;
-  urgency: number;
   difficulty: number;
   deadline_at: string;
   time_estimate_minutes: string;
@@ -65,7 +63,6 @@ const emptyDraft: TaskDraft = {
   title: "",
   category_id: null,
   importance: 5,
-  urgency: 5,
   difficulty: 5,
   deadline_at: "",
   time_estimate_minutes: "30",
@@ -151,6 +148,39 @@ function deadlineInputValue(value: string | null): string {
   return new Date(deadline.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
+// Mirrors URGENCY_ANCHORS in backend/app/main.py; keep the two in sync.
+const urgencyAnchors: Array<[number, number]> = [
+  [0, 10],
+  [3, 9],
+  [12, 8],
+  [24, 7],
+  [72, 6],
+  [168, 5],
+  [336, 4],
+  [720, 3],
+  [1440, 2],
+  [2160, 1],
+];
+
+function urgencyForDeadline(deadline: string): number {
+  const hoursUntilDeadline = (new Date(deadline).getTime() - Date.now()) / 3600000;
+  if (Number.isNaN(hoursUntilDeadline)) {
+    return 1;
+  }
+  if (hoursUntilDeadline <= 0) {
+    return 10;
+  }
+  let [previousHours, previousUrgency] = urgencyAnchors[0];
+  for (const [anchorHours, anchorUrgency] of urgencyAnchors.slice(1)) {
+    if (hoursUntilDeadline <= anchorHours) {
+      const position = (hoursUntilDeadline - previousHours) / (anchorHours - previousHours);
+      return previousUrgency + (anchorUrgency - previousUrgency) * position;
+    }
+    [previousHours, previousUrgency] = [anchorHours, anchorUrgency];
+  }
+  return 1;
+}
+
 function taskPayloadFromDraft(draft: TaskDraft) {
   const minutes = parseTimeEstimate(draft.time_estimate_minutes);
   if (minutes === null) {
@@ -168,7 +198,6 @@ function draftFromTask(task: Task): TaskDraft {
     title: task.title,
     category_id: task.category_id,
     importance: task.importance,
-    urgency: task.base_urgency ?? task.urgency,
     difficulty: task.difficulty,
     deadline_at: deadlineInputValue(task.deadline_at),
     time_estimate_minutes: String(task.time_estimate_minutes),
@@ -253,61 +282,31 @@ function AxisInput({
 }
 
 function UrgencyInput({
-  urgency,
   deadline,
-  onUrgencyChange,
   onDeadlineChange,
 }: {
-  urgency: number;
   deadline: string;
-  onUrgencyChange: (value: number) => void;
   onDeadlineChange: (value: string) => void;
 }) {
-  const mode = deadline ? "deadline" : "slider";
-
   return (
     <div className="axis-control urgency-control">
       <div className="urgency-control-header">
         <span>
-          Urgency <strong>{formatMetric(urgency)}</strong>
+          Urgency <strong>{formatMetric(deadline ? urgencyForDeadline(deadline) : 1)}</strong>
         </span>
-        <div className="mode-toggle" aria-label="Urgency input mode">
-          <button
-            className={mode === "slider" ? "active" : ""}
-            type="button"
-            onClick={() => onDeadlineChange("")}
-          >
-            Slider
-          </button>
-          <button
-            className={mode === "deadline" ? "active" : ""}
-            type="button"
-            onClick={() => {
-              if (!deadline) {
-                onDeadlineChange(deadlineInputValue(new Date().toISOString()));
-              }
-            }}
-          >
-            Deadline
-          </button>
-        </div>
+        {deadline ? (
+          <div className="mode-toggle">
+            <button type="button" onClick={() => onDeadlineChange("")}>
+              Clear
+            </button>
+          </div>
+        ) : null}
       </div>
-      {mode === "slider" ? (
-        <input
-          type="range"
-          min="0"
-          max="10"
-          step="0.01"
-          value={urgency}
-          onChange={(event) => onUrgencyChange(Number(event.target.value))}
-        />
-      ) : (
-        <input
-          type="datetime-local"
-          value={deadline}
-          onChange={(event) => onDeadlineChange(event.target.value)}
-        />
-      )}
+      <input
+        type="datetime-local"
+        value={deadline}
+        onChange={(event) => onDeadlineChange(event.target.value)}
+      />
     </div>
   );
 }
@@ -597,9 +596,7 @@ function TaskForm({
           onChange={(importance) => onChange({ ...draft, importance })}
         />
         <UrgencyInput
-          urgency={draft.urgency}
           deadline={draft.deadline_at}
-          onUrgencyChange={(urgency) => onChange({ ...draft, urgency })}
           onDeadlineChange={(deadline_at) => onChange({ ...draft, deadline_at })}
         />
         <AxisInput

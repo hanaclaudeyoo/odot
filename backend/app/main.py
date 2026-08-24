@@ -26,6 +26,28 @@ from .scoring import task_score
 
 DECLINE_WINDOW_SECONDS = 5 * 60
 
+# Deadline proximity mapped onto the urgency rubric, as (hours until deadline, urgency).
+# 10 overdue, 9 next few hours, 8 end of today, 7 tomorrow, 6 next few days,
+# 5 end of this week, 4 next week, 3 end of the month, 2 next month, 1 not due soon.
+URGENCY_ANCHORS = (
+    (0, 10.0),
+    (3, 9.0),
+    (12, 8.0),
+    (24, 7.0),
+    (72, 6.0),
+    (168, 5.0),
+    (336, 4.0),
+    (720, 3.0),
+    (1440, 2.0),
+    (2160, 1.0),
+)
+
+# A task with no deadline is rubric level 1, "not due soon".
+NO_DEADLINE_URGENCY = 1.0
+
+# urgency is a legacy NOT NULL column that is no longer read; urgency derives from deadline_at.
+LEGACY_URGENCY = 0
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -58,34 +80,36 @@ def parse_dt(value: str) -> datetime:
     return parsed
 
 
-def dynamic_urgency(task: Row | dict) -> float:
-    base_urgency = float(task["urgency"])
-    deadline_at = task["deadline_at"]
-    if deadline_at is None:
-        return base_urgency
-
-    deadline = parse_dt(deadline_at)
-    hours_until_deadline = (deadline - now_utc()).total_seconds() / 3600
+def deadline_urgency(hours_until_deadline: float) -> float:
     if hours_until_deadline <= 0:
         return 10
 
-    intensity = (float(task["difficulty"]) + float(task["importance"])) / 20
-    horizon_hours = 12 + intensity * 324
-    if hours_until_deadline >= horizon_hours:
-        return base_urgency
+    previous_hours, previous_urgency = URGENCY_ANCHORS[0]
+    for anchor_hours, anchor_urgency in URGENCY_ANCHORS[1:]:
+        if hours_until_deadline <= anchor_hours:
+            position = (hours_until_deadline - previous_hours) / (anchor_hours - previous_hours)
+            return round(previous_urgency + (anchor_urgency - previous_urgency) * position, 2)
+        previous_hours, previous_urgency = anchor_hours, anchor_urgency
 
-    pressure = 1 - (hours_until_deadline / horizon_hours)
-    curve = 2 - intensity * 1.3
-    urgency_lift = (10 - base_urgency) * (pressure ** curve)
-    return min(10, max(base_urgency, round(base_urgency + urgency_lift, 2)))
+    return URGENCY_ANCHORS[-1][1]
+
+
+def task_urgency(task: Row | dict, reference_time: datetime) -> float:
+    deadline_at = task["deadline_at"]
+    if deadline_at is None:
+        return NO_DEADLINE_URGENCY
+
+    hours_until_deadline = (parse_dt(deadline_at) - reference_time).total_seconds() / 3600
+    return deadline_urgency(hours_until_deadline)
 
 
 def task_data_from_row(row: Row) -> dict:
     data = dict(row)
-    base_urgency = data["urgency"]
-    data["base_urgency"] = base_urgency
-    if data["status"] == "active":
-        data["urgency"] = dynamic_urgency(data)
+    # Archived tasks freeze at the urgency they had when they were archived; active
+    # tasks are measured against the present.
+    archived_at = data["archived_at"]
+    reference_time = now_utc() if data["status"] == "active" or archived_at is None else parse_dt(archived_at)
+    data["urgency"] = task_urgency(data, reference_time)
     return data
 
 
@@ -401,7 +425,7 @@ def create_task(payload: TaskCreate) -> Task:
             (
                 payload.title,
                 payload.importance,
-                payload.urgency,
+                LEGACY_URGENCY,
                 payload.difficulty,
                 payload.time_estimate_minutes,
                 payload.deadline_at,

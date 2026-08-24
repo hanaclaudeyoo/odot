@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 AxisValue = float
@@ -12,7 +12,6 @@ AxisValue = float
 class TaskBase(BaseModel):
     title: str
     importance: AxisValue = Field(ge=0, le=10)
-    urgency: AxisValue = Field(ge=0, le=10)
     difficulty: AxisValue = Field(ge=0, le=10)
     time_estimate_minutes: int = Field(gt=0)
     deadline_at: str | None = None
@@ -42,13 +41,15 @@ class TaskBase(BaseModel):
 
 
 class TaskCreate(TaskBase):
-    pass
+    # Reject unknown keys so a client still sending urgency fails loudly.
+    model_config = ConfigDict(extra="forbid")
 
 
 class TaskUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = None
     importance: AxisValue | None = Field(default=None, ge=0, le=10)
-    urgency: AxisValue | None = Field(default=None, ge=0, le=10)
     difficulty: AxisValue | None = Field(default=None, ge=0, le=10)
     time_estimate_minutes: int | None = Field(default=None, gt=0)
     deadline_at: str | None = None
@@ -81,7 +82,8 @@ class TaskUpdate(BaseModel):
 
 class Task(TaskBase):
     id: int
-    base_urgency: AxisValue
+    # Derived from deadline_at on read; never accepted as input.
+    urgency: AxisValue
     status: Literal["active", "archived", "deleted"]
     created_at: str
     archived_at: str | None = None
