@@ -57,6 +57,47 @@ CREATE TABLE IF NOT EXISTS active_session (
 )
 """
 
+TAGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 32),
+    sort_order INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+TASK_TAGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS task_tags (
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, tag_id)
+)
+"""
+
+# Fixed vocabulary of scheduling-constraint tags, in display order.
+SEED_TAGS = (
+    "Today",
+    "Sit Down",
+    "Home",
+    "Outside",
+    "Work Hours",
+    "Daylight",
+)
+
+
+def seed_tags(db: sqlite3.Connection) -> None:
+    for sort_order, name in enumerate(SEED_TAGS):
+        db.execute(
+            """
+            INSERT INTO tags (name, sort_order) VALUES (?, ?)
+            ON CONFLICT(name) DO UPDATE SET sort_order = excluded.sort_order
+            """,
+            (name, sort_order),
+        )
+    # SEED_TAGS is the source of truth, so tags dropped from it are removed here.
+    # This cascades into task_tags, unassigning the tag from any task that had it.
+    placeholders = ", ".join("?" for _ in SEED_TAGS)
+    db.execute(f"DELETE FROM tags WHERE name NOT IN ({placeholders})", SEED_TAGS)
+
 
 def _table_sql(db: sqlite3.Connection, table_name: str) -> str | None:
     row = db.execute(
@@ -143,3 +184,8 @@ def init_db() -> None:
         else:
             db.execute(TASKS_SCHEMA)
             db.execute(SESSION_SCHEMA)
+        # Created after the tasks migration: renaming tasks would repoint task_tags'
+        # foreign key at the old table, and dropping it would cascade the rows away.
+        db.execute(TAGS_SCHEMA)
+        db.execute(TASK_TAGS_SCHEMA)
+        seed_tags(db)

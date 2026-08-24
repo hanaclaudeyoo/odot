@@ -27,6 +27,7 @@ type Task = {
   time_estimate_minutes: number;
   deadline_at: string | null;
   category_id: number | null;
+  tag_ids: number[];
   category_snapshot: string | null;
   status: TaskStatus;
   created_at: string;
@@ -42,6 +43,12 @@ type Category = {
   created_at: string;
 };
 
+type Tag = {
+  id: number;
+  name: string;
+  sort_order: number;
+};
+
 type Session = {
   task: Task;
   started_at: string;
@@ -55,6 +62,7 @@ type TaskDraft = {
   difficulty: number;
   deadline_at: string;
   time_estimate_minutes: string;
+  tag_ids: number[];
 };
 
 type TaskSortKey = "importance" | "urgency" | "difficulty" | "time_estimate_minutes";
@@ -66,6 +74,7 @@ const emptyDraft: TaskDraft = {
   difficulty: 5,
   deadline_at: "",
   time_estimate_minutes: "30",
+  tag_ids: [],
 };
 
 const axisTicks = [1, 2, 3, 4, 6, 7, 8, 9, 10];
@@ -201,6 +210,7 @@ function draftFromTask(task: Task): TaskDraft {
     difficulty: task.difficulty,
     deadline_at: deadlineInputValue(task.deadline_at),
     time_estimate_minutes: String(task.time_estimate_minutes),
+    tag_ids: task.tag_ids,
   };
 }
 
@@ -307,6 +317,84 @@ function UrgencyInput({
         value={deadline}
         onChange={(event) => onDeadlineChange(event.target.value)}
       />
+    </div>
+  );
+}
+
+function TagPill({ name }: { name: string }) {
+  return <span className="tag-pill">{name}</span>;
+}
+
+function TagPicker({
+  value,
+  tags,
+  onChange,
+}: {
+  value: number[];
+  tags: Tag[];
+  onChange: (tagIds: number[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pendingTagIds, setPendingTagIds] = useState<number[]>(value);
+  const selectedTags = tags.filter((tag) => value.includes(tag.id));
+
+  function openPicker() {
+    setPendingTagIds(value);
+    setOpen(true);
+  }
+
+  function toggle(tagId: number) {
+    setPendingTagIds((current) =>
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
+    );
+  }
+
+  return (
+    <div className="tag-picker">
+      <button className="tag-picker-trigger" type="button" onClick={openPicker}>
+        {selectedTags.length === 0 ? (
+          <span className="tag-picker-placeholder">No tags</span>
+        ) : (
+          <span className="tag-pill-row">
+            {selectedTags.map((tag) => (
+              <TagPill key={tag.id} name={tag.name} />
+            ))}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="tag-picker-popover">
+          <ul className="tag-option-list">
+            {tags.map((tag) => (
+              <li key={tag.id}>
+                <label className="tag-option">
+                  <input
+                    type="checkbox"
+                    checked={pendingTagIds.includes(tag.id)}
+                    onChange={() => toggle(tag.id)}
+                  />
+                  <TagPill name={tag.name} />
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="tag-picker-actions">
+            <button className="secondary" type="button" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                // Emit in the tags' display order so the value is stable.
+                onChange(tags.filter((tag) => pendingTagIds.includes(tag.id)).map((tag) => tag.id));
+                setOpen(false);
+              }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -527,6 +615,7 @@ function CategoryFilterPicker({
 function TaskForm({
   draft,
   categories,
+  tags,
   submitLabel,
   canDelete,
   onChange,
@@ -538,6 +627,7 @@ function TaskForm({
 }: {
   draft: TaskDraft;
   categories: Category[];
+  tags: Tag[];
   submitLabel: string;
   canDelete?: boolean;
   onChange: (draft: TaskDraft) => void;
@@ -629,6 +719,14 @@ function TaskForm({
         />
         <span>min</span>
       </label>
+      <div className="field">
+        <span>Tags</span>
+        <TagPicker
+          value={draft.tag_ids}
+          tags={tags}
+          onChange={(tag_ids) => onChange({ ...draft, tag_ids })}
+        />
+      </div>
       <div className="form-actions">
         {canDelete && onDelete && (
           <button className="danger" type="button" onClick={onDelete}>
@@ -955,11 +1053,13 @@ function PulledTask({
 function DeclineEditor({
   session,
   categories,
+  tags,
   onCancel,
   onSaved,
 }: {
   session: Session;
   categories: Category[];
+  tags: Tag[];
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -1003,6 +1103,7 @@ function DeclineEditor({
         <TaskForm
           draft={draft}
           categories={categories}
+          tags={tags}
           submitLabel="Save edit"
           canDelete
           onChange={setDraft}
@@ -1066,6 +1167,7 @@ function TaskModal({
   title,
   draft,
   categories,
+  tags,
   submitLabel,
   error,
   canDelete,
@@ -1079,6 +1181,7 @@ function TaskModal({
   title: string;
   draft: TaskDraft;
   categories: Category[];
+  tags: Tag[];
   submitLabel: string;
   error: string;
   canDelete: boolean;
@@ -1102,6 +1205,7 @@ function TaskModal({
         <TaskForm
           draft={draft}
           categories={categories}
+          tags={tags}
           submitLabel={submitLabel}
           canDelete={canDelete}
           onChange={onChange}
@@ -1542,6 +1646,7 @@ function App() {
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
   const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [draft, setDraft] = useState<TaskDraft>(emptyDraft);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -1555,16 +1660,18 @@ function App() {
   const [taskModalError, setTaskModalError] = useState("");
 
   async function refresh() {
-    const [active, archived, currentSession, nextCategories] = await Promise.all([
+    const [active, archived, currentSession, nextCategories, nextTags] = await Promise.all([
       api<Task[]>("/tasks?status=active"),
       api<Task[]>("/tasks?status=archived"),
       api<Session | null>("/session"),
       api<Category[]>("/categories"),
+      api<Tag[]>("/tags"),
     ]);
     setActiveTasks(active);
     setArchivedTasks(archived);
     setSession(currentSession);
     setCategories(nextCategories);
+    setTags(nextTags);
   }
 
   useEffect(() => {
@@ -1713,6 +1820,7 @@ function App() {
       <DeclineEditor
         session={session}
         categories={categories}
+        tags={tags}
         onCancel={() => setDeclineEditing(false)}
         onSaved={async () => {
           setDeclineEditing(false);
@@ -1793,6 +1901,7 @@ function App() {
           title={editingTask ? "Edit Task" : "New Task"}
           draft={draft}
           categories={categories}
+          tags={tags}
           submitLabel={editingTask ? "Save Task" : "Add Task"}
           error={taskModalError}
           canDelete={editingTask !== null}

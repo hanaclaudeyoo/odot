@@ -43,6 +43,7 @@ def create_task(
     difficulty: float,
     category_id: int | None = None,
     deadline_at: str | None = None,
+    tag_ids: list[int] | None = None,
 ):
     payload = {
         "title": title,
@@ -52,6 +53,8 @@ def create_task(
     }
     if category_id is not None:
         payload["category_id"] = category_id
+    if tag_ids is not None:
+        payload["tag_ids"] = tag_ids
     # Urgency is deadline-only now, so express the requested urgency as a deadline.
     if deadline_at is None:
         deadline_at = deadline_for_urgency(urgency, datetime.now(timezone.utc))
@@ -248,6 +251,110 @@ def test_archived_task_freezes_urgency_at_archive_time(client, monkeypatch):
     archived = client.get("/tasks?status=archived").json()[0]
 
     assert archived["urgency"] == 7
+
+
+def tag_ids_by_name(client: TestClient) -> dict[str, int]:
+    return {tag["name"]: tag["id"] for tag in client.get("/tags").json()}
+
+
+def test_lists_seeded_tags(client):
+    tags = client.get("/tags").json()
+
+    assert [tag["name"] for tag in tags] == [
+        "Today",
+        "Sit Down",
+        "Home",
+        "Outside",
+        "Work Hours",
+        "Daylight",
+    ]
+    assert [tag["sort_order"] for tag in tags] == list(range(len(tags)))
+
+
+def test_seeding_removes_tags_dropped_from_the_seed_list(client):
+    import app.database as database
+
+    with database.connect() as db:
+        db.execute("INSERT INTO tags (name, sort_order) VALUES ('retired-tag', 99)")
+    assert "retired-tag" in tag_ids_by_name(client)
+
+    database.init_db()
+
+    assert "retired-tag" not in tag_ids_by_name(client)
+
+
+def test_task_defaults_to_no_tags(client):
+    task = create_task(client, "Untagged", 5, 5, 3)
+
+    assert task["tag_ids"] == []
+
+
+def test_create_task_with_tags(client):
+    tags = tag_ids_by_name(client)
+
+    task = create_task(client, "Tagged", 5, 5, 3, tag_ids=[tags["Today"], tags["Outside"]])
+
+    assert task["tag_ids"] == [tags["Today"], tags["Outside"]]
+    listed = client.get("/tasks?status=active").json()[0]
+    assert listed["tag_ids"] == [tags["Today"], tags["Outside"]]
+
+
+def test_update_replaces_tags(client):
+    tags = tag_ids_by_name(client)
+    task = create_task(client, "Retag me", 5, 5, 3, tag_ids=[tags["Today"]])
+
+    response = client.patch(f"/tasks/{task['id']}", json={"tag_ids": [tags["Sit Down"]]})
+
+    assert response.status_code == 200
+    assert response.json()["tag_ids"] == [tags["Sit Down"]]
+
+
+def test_update_can_clear_tags(client):
+    tags = tag_ids_by_name(client)
+    task = create_task(client, "Clear me", 5, 5, 3, tag_ids=[tags["Today"]])
+
+    response = client.patch(f"/tasks/{task['id']}", json={"tag_ids": []})
+
+    assert response.status_code == 200
+    assert response.json()["tag_ids"] == []
+
+
+def test_update_without_tag_ids_leaves_tags_untouched(client):
+    tags = tag_ids_by_name(client)
+    task = create_task(client, "Keep tags", 5, 5, 3, tag_ids=[tags["Home"]])
+
+    response = client.patch(f"/tasks/{task['id']}", json={"title": "Renamed"})
+
+    assert response.json()["title"] == "Renamed"
+    assert response.json()["tag_ids"] == [tags["Home"]]
+
+
+def test_unknown_tag_is_rejected(client):
+    task = create_task(client, "Bad tag", 5, 5, 3)
+
+    response = client.patch(f"/tasks/{task['id']}", json={"tag_ids": [9999]})
+
+    assert response.status_code == 404
+
+
+def test_duplicate_tag_ids_are_deduplicated(client):
+    tags = tag_ids_by_name(client)
+
+    task = create_task(
+        client, "Dupes", 5, 5, 3, tag_ids=[tags["Today"], tags["Today"], tags["Sit Down"]]
+    )
+
+    assert task["tag_ids"] == [tags["Today"], tags["Sit Down"]]
+
+
+def test_tags_are_returned_in_display_order(client):
+    tags = tag_ids_by_name(client)
+
+    task = create_task(
+        client, "Order", 5, 5, 3, tag_ids=[tags["Daylight"], tags["Today"], tags["Home"]]
+    )
+
+    assert task["tag_ids"] == [tags["Today"], tags["Home"], tags["Daylight"]]
 
 
 def test_lists_active_and_archived_tasks(client):

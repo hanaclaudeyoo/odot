@@ -17,6 +17,7 @@ from .models import (
     CategoryUpdate,
     DeclineEditRequest,
     PullRequest,
+    Tag,
     Task,
     TaskCreate,
     TaskUpdate,
@@ -113,8 +114,59 @@ def task_data_from_row(row: Row) -> dict:
     return data
 
 
-def task_from_row(row: Row) -> Task:
-    return Task(**task_data_from_row(row))
+def task_from_row(row: Row, tag_ids: list[int]) -> Task:
+    return Task(**task_data_from_row(row), tag_ids=tag_ids)
+
+
+def task_tag_ids(db, task_id: int) -> list[int]:
+    rows = db.execute(
+        """
+        SELECT task_tags.tag_id
+        FROM task_tags
+        JOIN tags ON tags.id = task_tags.tag_id
+        WHERE task_tags.task_id = ?
+        ORDER BY tags.sort_order, tags.id
+        """,
+        (task_id,),
+    ).fetchall()
+    return [row["tag_id"] for row in rows]
+
+
+def tag_ids_by_task(db) -> dict[int, list[int]]:
+    grouped: dict[int, list[int]] = {}
+    rows = db.execute(
+        """
+        SELECT task_tags.task_id, task_tags.tag_id
+        FROM task_tags
+        JOIN tags ON tags.id = task_tags.tag_id
+        ORDER BY task_tags.task_id, tags.sort_order, tags.id
+        """
+    ).fetchall()
+    for row in rows:
+        grouped.setdefault(row["task_id"], []).append(row["tag_id"])
+    return grouped
+
+
+def ensure_tags_exist(db, tag_ids: list[int]) -> None:
+    if not tag_ids:
+        return
+    placeholders = ", ".join("?" for _ in tag_ids)
+    found = db.execute(
+        f"SELECT COUNT(*) AS count FROM tags WHERE id IN ({placeholders})", tag_ids
+    ).fetchone()["count"]
+    if found != len(tag_ids):
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+
+def replace_task_tags(db, task_id: int, tag_ids: list[int]) -> None:
+    # Duplicates would violate the join table's primary key; read-back sorts by display order.
+    unique_tag_ids = list(dict.fromkeys(tag_ids))
+    ensure_tags_exist(db, unique_tag_ids)
+    db.execute("DELETE FROM task_tags WHERE task_id = ?", (task_id,))
+    db.executemany(
+        "INSERT INTO task_tags (task_id, tag_id) VALUES (?, ?)",
+        [(task_id, tag_id) for tag_id in unique_tag_ids],
+    )
 
 
 def category_from_row(row: Row) -> Category:
@@ -281,11 +333,20 @@ def session_response(row: Row | None) -> ActiveSession | None:
     started = parse_dt(row["started_at"])
     task_data = task_data_from_row(row)
     task_data.pop("started_at", None)
+    with connect() as db:
+        task_data["tag_ids"] = task_tag_ids(db, row["id"])
     return ActiveSession(
         task=Task(**task_data),
         started_at=row["started_at"],
         decline_available_until=(started + timedelta(seconds=DECLINE_WINDOW_SECONDS)).isoformat(),
     )
+
+
+@app.get("/tags", response_model=list[Tag])
+def list_tags() -> list[Tag]:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM tags ORDER BY sort_order, id").fetchall()
+    return [Tag(**dict(row)) for row in rows]
 
 
 @app.get("/categories", response_model=list[Category])
@@ -400,7 +461,8 @@ def list_tasks(status: str = Query(default="active", pattern="^(active|archived)
             rows = db.execute(
                 "SELECT * FROM tasks WHERE status = 'active' ORDER BY created_at DESC"
             ).fetchall()
-    return [task_from_row(row) for row in rows]
+        grouped_tag_ids = tag_ids_by_task(db)
+    return [task_from_row(row, grouped_tag_ids.get(row["id"], [])) for row in rows]
 
 
 @app.post("/tasks", response_model=Task, status_code=201)
@@ -433,28 +495,42 @@ def create_task(payload: TaskCreate) -> Task:
                 iso_now(),
             ),
         )
+        replace_task_tags(db, cursor.lastrowid, payload.tag_ids)
         row = db.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
-    return task_from_row(row)
+        tag_ids = task_tag_ids(db, cursor.lastrowid)
+    return task_from_row(row, tag_ids)
 
 
 @app.patch("/tasks/{task_id}", response_model=Task)
 def update_task(task_id: int, payload: TaskUpdate) -> Task:
     updates = payload.model_dump(exclude_unset=True)
-    if not updates:
-        return task_from_row(get_task_row(task_id))
+    # tag_ids lives in a join table, so it never belongs in the UPDATE statement.
+    tag_ids = updates.pop("tag_ids", None)
+    if not updates and tag_ids is None:
+        row = get_task_row(task_id)
+        with connect() as db:
+            return task_from_row(row, task_tag_ids(db, task_id))
 
     with connect() as db:
         if "category_id" in updates:
             ensure_category_exists(db, updates["category_id"])
-        assignments = ", ".join(f"{key} = ?" for key in updates)
-        values = [*updates.values(), task_id]
-        cursor = db.execute(
-            f"UPDATE tasks SET {assignments} WHERE id = ? AND status = 'active'", values
-        )
-        if cursor.rowcount == 0:
+        if updates:
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            values = [*updates.values(), task_id]
+            cursor = db.execute(
+                f"UPDATE tasks SET {assignments} WHERE id = ? AND status = 'active'", values
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Active task not found")
+        elif db.execute(
+            "SELECT 1 FROM tasks WHERE id = ? AND status = 'active'", (task_id,)
+        ).fetchone() is None:
             raise HTTPException(status_code=404, detail="Active task not found")
+        if tag_ids is not None:
+            replace_task_tags(db, task_id, tag_ids)
         row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    return task_from_row(row)
+        current_tag_ids = task_tag_ids(db, task_id)
+    return task_from_row(row, current_tag_ids)
 
 
 @app.delete("/tasks/{task_id}", status_code=204, response_model=None)
@@ -555,16 +631,21 @@ def decline_edit(payload: DeclineEditRequest) -> Task | None:
         if payload.task is None:
             raise HTTPException(status_code=422, detail="Task changes are required")
         updates = payload.task.model_dump(exclude_unset=True)
-        if not updates:
+        tag_ids = updates.pop("tag_ids", None)
+        if not updates and tag_ids is None:
             raise HTTPException(status_code=422, detail="At least one task change is required")
         if "category_id" in updates:
             ensure_category_exists(db, updates["category_id"])
 
-        assignments = ", ".join(f"{key} = ?" for key in updates)
-        db.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", [*updates.values(), task_id])
+        if updates:
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            db.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", [*updates.values(), task_id])
+        if tag_ids is not None:
+            replace_task_tags(db, task_id, tag_ids)
         db.execute("DELETE FROM active_session WHERE id = 1")
         row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    return task_from_row(row)
+        current_tag_ids = task_tag_ids(db, task_id)
+    return task_from_row(row, current_tag_ids)
 
 
 @app.post("/tasks/{task_id}/finish", response_model=Task)
@@ -589,4 +670,5 @@ def finish_task(task_id: int) -> Task:
         )
         db.execute("DELETE FROM active_session WHERE id = 1")
         row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    return task_from_row(row)
+        tag_ids = task_tag_ids(db, task_id)
+    return task_from_row(row, tag_ids)

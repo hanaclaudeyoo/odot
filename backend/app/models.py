@@ -16,6 +16,7 @@ class TaskBase(BaseModel):
     time_estimate_minutes: int = Field(gt=0)
     deadline_at: str | None = None
     category_id: int | None = None
+    tag_ids: list[int] = Field(default_factory=list)
 
     @field_validator("title")
     @classmethod
@@ -54,6 +55,7 @@ class TaskUpdate(BaseModel):
     time_estimate_minutes: int | None = Field(default=None, gt=0)
     deadline_at: str | None = None
     category_id: int | None = None
+    tag_ids: list[int] | None = None
 
     @field_validator("title")
     @classmethod
@@ -89,6 +91,12 @@ class Task(TaskBase):
     archived_at: str | None = None
     actual_duration_seconds: int | None = None
     category_snapshot: str | None = None
+
+
+class Tag(BaseModel):
+    id: int
+    name: str
+    sort_order: int
 
 
 class CategoryBase(BaseModel):
