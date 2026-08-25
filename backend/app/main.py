@@ -553,6 +553,38 @@ def delete_task(task_id: int) -> None:
         db.execute("DELETE FROM active_session WHERE task_id = ?", (task_id,))
 
 
+@app.post("/tasks/{task_id}/restore", response_model=Task)
+def restore_task(task_id: int) -> Task:
+    with connect() as db:
+        cursor = db.execute(
+            """
+            UPDATE tasks
+            SET status = 'active',
+                archived_at = NULL,
+                actual_duration_seconds = NULL,
+                category_snapshot = NULL
+            WHERE id = ? AND status IN ('archived', 'deleted')
+            """,
+            (task_id,),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Archived task not found")
+        row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        tag_ids = task_tag_ids(db, task_id)
+    return task_from_row(row, tag_ids)
+
+
+@app.delete("/tasks/{task_id}/purge", status_code=204, response_model=None)
+def purge_task(task_id: int) -> None:
+    """Permanently remove an archived task; tag assignments cascade away with it."""
+    with connect() as db:
+        cursor = db.execute(
+            "DELETE FROM tasks WHERE id = ? AND status IN ('archived', 'deleted')", (task_id,)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Archived task not found")
+
+
 @app.post("/tasks/pull", response_model=ActiveSession)
 def pull_task(payload: PullRequest) -> ActiveSession:
     if get_session_row() is not None:

@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Home,
   Menu,
+  MoreVertical,
   Plus,
   Trash2,
   X,
@@ -730,7 +731,7 @@ function TaskForm({
       <div className="form-actions">
         {canDelete && onDelete && (
           <button className="danger" type="button" onClick={onDelete}>
-            Delete
+            Archive
           </button>
         )}
         {onCancel && (
@@ -738,16 +739,6 @@ function TaskForm({
             Cancel
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => {
-            if (validateEstimate()) {
-              onSubmit();
-            }
-          }}
-        >
-          {submitLabel}
-        </button>
         {onStart && (
           <button
             className="start-task-button"
@@ -761,6 +752,16 @@ function TaskForm({
             Start Task
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => {
+            if (validateEstimate()) {
+              onSubmit();
+            }
+          }}
+        >
+          {submitLabel}
+        </button>
       </div>
     </form>
   );
@@ -961,7 +962,106 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
   );
 }
 
-function ArchiveList({ tasks, categories }: { tasks: Task[]; categories: Category[] }) {
+function ArchiveRowMenu({ onRestore, onDelete }: { onRestore: () => void; onDelete: () => void }) {
+  // The archive table scrolls, which would clip an absolutely positioned popover, so the
+  // menu is fixed-positioned against the trigger and closed whenever the page moves.
+  const [menuPosition, setMenuPosition] = useState<{ top: number; right: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const open = menuPosition !== null;
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setMenuPosition(null);
+      }
+    }
+    function close() {
+      setMenuPosition(null);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  function toggle() {
+    if (open) {
+      setMenuPosition(null);
+      return;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setMenuPosition({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    }
+  }
+
+  return (
+    <div className="row-menu" ref={containerRef}>
+      <button
+        ref={triggerRef}
+        className="icon-button"
+        type="button"
+        title="Task actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={toggle}
+      >
+        <MoreVertical size={16} />
+      </button>
+      {menuPosition && (
+        <div
+          className="row-menu-popover"
+          role="menu"
+          style={{ top: menuPosition.top, right: menuPosition.right }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenuPosition(null);
+              onRestore();
+            }}
+          >
+            Restore to active
+          </button>
+          <button
+            className="danger"
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenuPosition(null);
+              onDelete();
+            }}
+          >
+            Delete permanently
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArchiveList({
+  tasks,
+  categories,
+  onRestore,
+  onPurge,
+}: {
+  tasks: Task[];
+  categories: Category[];
+  onRestore: (task: Task) => void;
+  onPurge: (task: Task) => void;
+}) {
+  const [pendingPurge, setPendingPurge] = useState<Task | null>(null);
+
   return (
     <div className="table-wrap archive">
       <table>
@@ -974,7 +1074,7 @@ function ArchiveList({ tasks, categories }: { tasks: Task[]; categories: Categor
             <th className="metric-header">Difficulty</th>
             <th className="time-header">Estimate</th>
             <th>Actual</th>
-            <th>Status</th>
+            <th className="row-menu-header" aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
@@ -989,12 +1089,50 @@ function ArchiveList({ tasks, categories }: { tasks: Task[]; categories: Categor
               <td className="metric-cell">{formatMetric(task.difficulty)}</td>
               <td className="time-cell">{formatEstimateDuration(task.time_estimate_minutes)}</td>
               <td>{task.actual_duration_seconds === null ? "-" : formatElapsed(task.actual_duration_seconds)}</td>
-              <td>{task.status === "deleted" ? "Deleted" : "Finished"}</td>
+              <td className="row-menu-cell">
+                <ArchiveRowMenu
+                  onRestore={() => onRestore(task)}
+                  onDelete={() => setPendingPurge(task)}
+                />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       {tasks.length === 0 && <p className="empty">No archived tasks.</p>}
+      {pendingPurge && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel warning-modal" role="dialog" aria-modal="true">
+            <div className="modal-heading">
+              <h2>Delete Permanently</h2>
+              <button
+                className="icon-button"
+                title="Close delete warning"
+                onClick={() => setPendingPurge(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="subtle">
+              "{pendingPurge.title}" will be erased for good. This cannot be undone.
+            </p>
+            <div className="form-actions">
+              <button className="secondary" onClick={() => setPendingPurge(null)}>
+                Cancel
+              </button>
+              <button
+                className="danger"
+                onClick={() => {
+                  onPurge(pendingPurge);
+                  setPendingPurge(null);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -1213,7 +1351,6 @@ function TaskModal({
           onDelete={onDelete}
           onStart={onStart}
           onSubmit={onSubmit}
-          onCancel={onClose}
         />
       </section>
     </div>
@@ -1773,6 +1910,26 @@ function App() {
     }
   }
 
+  async function restoreTask(task: Task) {
+    setError("");
+    try {
+      await api<Task>(`/tasks/${task.id}/restore`, { method: "POST" });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not restore task");
+    }
+  }
+
+  async function purgeTask(task: Task) {
+    setError("");
+    try {
+      await api<void>(`/tasks/${task.id}/purge`, { method: "DELETE" });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete task");
+    }
+  }
+
   async function deleteEditingTask() {
     if (!editingTask) return;
     const deleted = await deleteTask(editingTask, setTaskModalError);
@@ -1885,7 +2042,12 @@ function App() {
           <div className="panel-heading">
             <h2>Archived</h2>
           </div>
-          <ArchiveList tasks={archivedTasks} categories={categories} />
+          <ArchiveList
+            tasks={archivedTasks}
+            categories={categories}
+            onRestore={restoreTask}
+            onPurge={purgeTask}
+          />
         </section>
       ) : (
         <CategoriesPage

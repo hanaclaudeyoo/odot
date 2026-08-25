@@ -446,6 +446,54 @@ h2 {
   background: #eef4f7;
 }
 
+.row-menu-header,
+.row-menu-cell {
+  width: 40px;
+}
+
+.row-menu {
+  position: relative;
+}
+
+.row-menu-popover {
+  background: #ffffff;
+  border: 1px solid #d9e1e8;
+  border-radius: 8px;
+  box-shadow: 0 14px 35px rgba(15, 23, 42, 0.16);
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  position: fixed;
+  width: max-content;
+  z-index: 30;
+}
+
+.row-menu-popover button {
+  background: #ffffff;
+  border: 0;
+  border-radius: 5px;
+  color: #27313f;
+  font-size: 12px;
+  font-weight: 400;
+  justify-content: flex-start;
+  min-height: 30px;
+  padding: 4px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.row-menu-popover button:hover {
+  background: #f1f5f9;
+}
+
+.row-menu-popover button.danger {
+  color: #b4232a;
+}
+
+.row-menu-popover button.danger:hover {
+  background: #fdf0f0;
+}
+
 .tag-picker {
   position: relative;
 }

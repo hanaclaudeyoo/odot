@@ -257,6 +257,86 @@ def tag_ids_by_name(client: TestClient) -> dict[str, int]:
     return {tag["name"]: tag["id"] for tag in client.get("/tags").json()}
 
 
+def archive_task(client: TestClient, task: dict) -> None:
+    client.post(f"/tasks/{task['id']}/start")
+    client.post(f"/tasks/{task['id']}/finish")
+
+
+def test_restore_returns_archived_task_to_active(client):
+    task = create_task(client, "Bring me back", 5, 5, 3)
+    archive_task(client, task)
+    assert client.get("/tasks?status=active").json() == []
+
+    response = client.post(f"/tasks/{task['id']}/restore")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    assert response.json()["archived_at"] is None
+    assert response.json()["actual_duration_seconds"] is None
+    assert [t["id"] for t in client.get("/tasks?status=active").json()] == [task["id"]]
+    assert client.get("/tasks?status=archived").json() == []
+
+
+def test_restore_works_on_a_deleted_task(client):
+    task = create_task(client, "Deleted then restored", 5, 5, 3)
+    client.delete(f"/tasks/{task['id']}")
+
+    response = client.post(f"/tasks/{task['id']}/restore")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+
+
+def test_restore_keeps_tags(client):
+    tags = tag_ids_by_name(client)
+    task = create_task(client, "Tagged archive", 5, 5, 3, tag_ids=[tags["Home"]])
+    archive_task(client, task)
+
+    response = client.post(f"/tasks/{task['id']}/restore")
+
+    assert response.json()["tag_ids"] == [tags["Home"]]
+
+
+def test_restore_rejects_an_active_task(client):
+    task = create_task(client, "Already active", 5, 5, 3)
+
+    assert client.post(f"/tasks/{task['id']}/restore").status_code == 404
+
+
+def test_purge_permanently_removes_an_archived_task(client):
+    task = create_task(client, "Erase me", 5, 5, 3)
+    archive_task(client, task)
+
+    response = client.delete(f"/tasks/{task['id']}/purge")
+
+    assert response.status_code == 204
+    assert client.get("/tasks?status=archived").json() == []
+    assert client.post(f"/tasks/{task['id']}/restore").status_code == 404
+
+
+def test_purge_removes_tag_assignments(client):
+    import app.database as database
+
+    tags = tag_ids_by_name(client)
+    task = create_task(client, "Tagged purge", 5, 5, 3, tag_ids=[tags["Home"]])
+    archive_task(client, task)
+
+    client.delete(f"/tasks/{task['id']}/purge")
+
+    with database.connect() as db:
+        remaining = db.execute(
+            "SELECT COUNT(*) AS count FROM task_tags WHERE task_id = ?", (task["id"],)
+        ).fetchone()["count"]
+    assert remaining == 0
+
+
+def test_purge_rejects_an_active_task(client):
+    task = create_task(client, "Still active", 5, 5, 3)
+
+    assert client.delete(f"/tasks/{task['id']}/purge").status_code == 404
+    assert len(client.get("/tasks?status=active").json()) == 1
+
+
 def test_lists_seeded_tags(client):
     tags = client.get("/tags").json()
 
@@ -267,6 +347,7 @@ def test_lists_seeded_tags(client):
         "Outside",
         "Work Hours",
         "Daylight",
+        "Contact",
     ]
     assert [tag["sort_order"] for tag in tags] == list(range(len(tags)))
 

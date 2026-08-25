@@ -81,6 +81,7 @@ SEED_TAGS = (
     "Outside",
     "Work Hours",
     "Daylight",
+    "Contact",
 )
 
 
