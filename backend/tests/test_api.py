@@ -262,6 +262,54 @@ def archive_task(client: TestClient, task: dict) -> None:
     client.post(f"/tasks/{task['id']}/finish")
 
 
+def test_complete_archives_task_with_entered_duration(client):
+    task = create_task(client, "Done by hand", 5, 5, 3)
+
+    response = client.post(f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 25})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "archived"
+    assert response.json()["actual_duration_seconds"] == 25 * 60
+    assert client.get("/tasks?status=active").json() == []
+    assert [t["id"] for t in client.get("/tasks?status=archived").json()] == [task["id"]]
+
+
+def test_complete_does_not_require_a_pull_session(client):
+    task = create_task(client, "Never pulled", 5, 5, 3)
+
+    assert client.get("/session").json() is None
+    assert client.post(
+        f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 5}
+    ).status_code == 200
+
+
+def test_complete_clears_an_active_session_for_that_task(client):
+    task = create_task(client, "Pulled then completed", 5, 5, 3)
+    client.post(f"/tasks/{task['id']}/start")
+
+    client.post(f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 5})
+
+    assert client.get("/session").json() is None
+
+
+def test_complete_requires_a_positive_duration(client):
+    task = create_task(client, "Bad duration", 5, 5, 3)
+
+    assert client.post(
+        f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 0}
+    ).status_code == 422
+    assert client.post(f"/tasks/{task['id']}/complete", json={}).status_code == 422
+
+
+def test_complete_rejects_an_already_archived_task(client):
+    task = create_task(client, "Twice", 5, 5, 3)
+    client.post(f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 5})
+
+    response = client.post(f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 5})
+
+    assert response.status_code == 404
+
+
 def test_restore_returns_archived_task_to_active(client):
     task = create_task(client, "Bring me back", 5, 5, 3)
     archive_task(client, task)

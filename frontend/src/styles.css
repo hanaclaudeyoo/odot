@@ -55,6 +55,16 @@ button.icon-button:hover {
   background: #eef4f7;
 }
 
+button.outlined {
+  background: #ffffff;
+  border-color: #176b87;
+  color: #176b87;
+}
+
+button.outlined:hover {
+  background: #eef6f9;
+}
+
 button.danger,
 button.icon-button.danger {
   background: #ffffff;

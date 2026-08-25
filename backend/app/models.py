@@ -157,6 +157,12 @@ class ActiveSession(BaseModel):
     decline_available_until: str
 
 
+class CompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actual_duration_minutes: int = Field(gt=0)
+
+
 class DeclineEditRequest(BaseModel):
     action: Literal["update", "delete"]
     task: TaskUpdate | None = None

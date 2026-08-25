@@ -622,6 +622,7 @@ function TaskForm({
   onChange,
   onErrorChange,
   onDelete,
+  onFinish,
   onStart,
   onSubmit,
   onCancel,
@@ -634,10 +635,15 @@ function TaskForm({
   onChange: (draft: TaskDraft) => void;
   onErrorChange: (error: string) => void;
   onDelete?: () => void;
+  onFinish?: (minutes: number) => void;
   onStart?: () => void;
   onSubmit: () => void;
   onCancel?: () => void;
 }) {
+  const [finishPromptOpen, setFinishPromptOpen] = useState(false);
+  const [finishMinutes, setFinishMinutes] = useState("");
+  const [finishError, setFinishError] = useState("");
+
   function validateEstimate(): boolean {
     if (parseTimeEstimate(draft.time_estimate_minutes) === null) {
       onErrorChange("Enter a positive whole number of minutes.");
@@ -645,6 +651,23 @@ function TaskForm({
     }
     onErrorChange("");
     return true;
+  }
+
+  function openFinishPrompt() {
+    // Seed with the estimate, which is usually close to the real answer.
+    setFinishMinutes(draft.time_estimate_minutes);
+    setFinishError("");
+    setFinishPromptOpen(true);
+  }
+
+  function confirmFinish() {
+    const minutes = parseTimeEstimate(finishMinutes);
+    if (minutes === null) {
+      setFinishError("Enter a positive whole number of minutes.");
+      return;
+    }
+    setFinishPromptOpen(false);
+    onFinish?.(minutes);
   }
 
   return (
@@ -734,6 +757,11 @@ function TaskForm({
             Archive
           </button>
         )}
+        {onFinish && (
+          <button className="secondary" type="button" onClick={openFinishPrompt}>
+            Finish
+          </button>
+        )}
         {onCancel && (
           <button className="secondary" type="button" onClick={onCancel}>
             Cancel
@@ -749,10 +777,11 @@ function TaskForm({
               }
             }}
           >
-            Start Task
+            Start
           </button>
         )}
         <button
+          className="outlined"
           type="button"
           onClick={() => {
             if (validateEstimate()) {
@@ -763,6 +792,59 @@ function TaskForm({
           {submitLabel}
         </button>
       </div>
+      {finishPromptOpen && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel warning-modal" role="dialog" aria-modal="true">
+            <div className="modal-heading">
+              <h2>Finish Task</h2>
+              <button
+                className="icon-button"
+                type="button"
+                title="Close finish prompt"
+                onClick={() => setFinishPromptOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {finishError && <p className="error modal-error">{finishError}</p>}
+            <label className="field compact-field">
+              <span>Time Taken</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoFocus
+                value={finishMinutes}
+                onChange={(event) => {
+                  if (/^\d*$/.test(event.target.value)) {
+                    setFinishError("");
+                    setFinishMinutes(event.target.value);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    confirmFinish();
+                  }
+                }}
+              />
+              <span>min</span>
+            </label>
+            <div className="form-actions">
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => setFinishPromptOpen(false)}
+              >
+                Cancel
+              </button>
+              <button type="button" onClick={confirmFinish}>
+                Finish
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </form>
   );
 }
@@ -1312,6 +1394,7 @@ function TaskModal({
   onChange,
   onErrorChange,
   onDelete,
+  onFinish,
   onStart,
   onSubmit,
   onClose,
@@ -1326,6 +1409,7 @@ function TaskModal({
   onChange: (draft: TaskDraft) => void;
   onErrorChange: (error: string) => void;
   onDelete: () => void;
+  onFinish?: (minutes: number) => void;
   onStart?: () => void;
   onSubmit: () => void;
   onClose: () => void;
@@ -1349,6 +1433,7 @@ function TaskModal({
           onChange={onChange}
           onErrorChange={onErrorChange}
           onDelete={onDelete}
+          onFinish={onFinish}
           onStart={onStart}
           onSubmit={onSubmit}
         />
@@ -1910,6 +1995,21 @@ function App() {
     }
   }
 
+  async function finishEditingTask(minutes: number) {
+    if (!editingTask) return;
+    setTaskModalError("");
+    try {
+      await api<Task>(`/tasks/${editingTask.id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ actual_duration_minutes: minutes }),
+      });
+      closeTaskModal();
+      await refresh();
+    } catch (err) {
+      setTaskModalError(err instanceof Error ? err.message : "Could not finish task");
+    }
+  }
+
   async function restoreTask(task: Task) {
     setError("");
     try {
@@ -2064,12 +2164,13 @@ function App() {
           draft={draft}
           categories={categories}
           tags={tags}
-          submitLabel={editingTask ? "Save Task" : "Add Task"}
+          submitLabel={editingTask ? "Save" : "Add Task"}
           error={taskModalError}
           canDelete={editingTask !== null}
           onChange={setDraft}
           onErrorChange={setTaskModalError}
           onDelete={deleteEditingTask}
+          onFinish={editingTask ? finishEditingTask : undefined}
           onStart={editingTask ? startEditingTask : undefined}
           onSubmit={submitTask}
           onClose={closeTaskModal}

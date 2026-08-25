@@ -15,6 +15,7 @@ from .models import (
     CategoryCreate,
     CategoryDeletePreview,
     CategoryUpdate,
+    CompleteRequest,
     DeclineEditRequest,
     PullRequest,
     Tag,
@@ -551,6 +552,30 @@ def delete_task(task_id: int) -> None:
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Active task not found")
         db.execute("DELETE FROM active_session WHERE task_id = ?", (task_id,))
+
+
+@app.post("/tasks/{task_id}/complete", response_model=Task)
+def complete_task(task_id: int, payload: CompleteRequest) -> Task:
+    """Archive an active task with a hand-entered duration, bypassing the pull session."""
+    with connect() as db:
+        snapshot = category_snapshot_for_task(db, task_id)
+        cursor = db.execute(
+            """
+            UPDATE tasks
+            SET status = 'archived',
+                archived_at = ?,
+                actual_duration_seconds = ?,
+                category_snapshot = COALESCE(category_snapshot, ?)
+            WHERE id = ? AND status = 'active'
+            """,
+            (iso_now(), payload.actual_duration_minutes * 60, snapshot, task_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Active task not found")
+        db.execute("DELETE FROM active_session WHERE task_id = ?", (task_id,))
+        row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        tag_ids = task_tag_ids(db, task_id)
+    return task_from_row(row, tag_ids)
 
 
 @app.post("/tasks/{task_id}/restore", response_model=Task)
