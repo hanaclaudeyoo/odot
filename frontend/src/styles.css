@@ -714,8 +714,16 @@ th {
   cursor: pointer;
 }
 
+.task-row.date-stripe-a td {
+  background: #ffffff;
+}
+
+.task-row.date-stripe-b td {
+  background: #f8fafb;
+}
+
 .task-row:hover td {
-  background: #f8fafc;
+  background: #f2f7f9;
 }
 
 .add-task-button {

@@ -145,6 +145,32 @@ function formatDateTime(value: string | null): string {
   }).format(date);
 }
 
+function formatDate(value: string | null): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+  }).format(date);
+}
+
+function dateStripeKey(value: string | null): string {
+  if (!value) {
+    return "none";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "none";
+  }
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
 function formatMetric(value: number): string {
   return value.toFixed(2);
 }
@@ -924,14 +950,28 @@ function TaskTable({
 }) {
   const [sortKey, setSortKey] = useState<TaskSortKey>("urgency");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [urgencyDisplay, setUrgencyDisplay] = useState<"value" | "deadline">("value");
   const sorted = [...tasks].sort((a, b) => {
     const leftValue = a[sortKey];
     const rightValue = b[sortKey];
     const delta = leftValue - rightValue;
     return sortDir === "asc" ? delta : -delta;
   });
+  const stripeByDate = new Map<string, "date-stripe-a" | "date-stripe-b">();
+  for (const task of sorted) {
+    const key = dateStripeKey(task.deadline_at);
+    if (!stripeByDate.has(key)) {
+      stripeByDate.set(key, stripeByDate.size % 2 === 0 ? "date-stripe-a" : "date-stripe-b");
+    }
+  }
 
   function toggleSort(key: TaskSortKey) {
+    if (key === "urgency") {
+      setSortKey("urgency");
+      setSortDir("desc");
+      setUrgencyDisplay((current) => (current === "value" ? "deadline" : "value"));
+      return;
+    }
     if (key !== sortKey) {
       setSortKey(key);
       setSortDir("desc");
@@ -959,7 +999,12 @@ function TaskTable({
                   onChange={onCategoryFilterChange}
                 />
               </th>
-              {(["urgency", "importance", "difficulty"] as const).map((key) => (
+              <th className="metric-header">
+                <button className="sort-button" onClick={() => toggleSort("urgency")}>
+                  urgency {sortKey === "urgency" ? "↓" : ""}
+                </button>
+              </th>
+              {(["importance", "difficulty"] as const).map((key) => (
                 <th className="metric-header" key={key}>
                   <button className="sort-button" onClick={() => toggleSort(key)}>
                     {key} {sortKey === key ? (sortDir === "asc" ? "↑" : "↓") : ""}
@@ -983,10 +1028,16 @@ function TaskTable({
               </td>
             </tr>
             {sorted.map((task) => (
-              <tr className="task-row" key={task.id} onClick={() => onEdit(task)}>
+              <tr
+                className={`task-row ${stripeByDate.get(dateStripeKey(task.deadline_at))}`}
+                key={task.id}
+                onClick={() => onEdit(task)}
+              >
                 <td>{task.title}</td>
                 <td className="category-cell">{categoryName(task.category_id, categories)}</td>
-                <td className="metric-cell">{formatMetric(task.urgency)}</td>
+                <td className={urgencyDisplay === "deadline" ? "metric-cell date-cell" : "metric-cell"}>
+                  {urgencyDisplay === "deadline" ? formatDate(task.deadline_at) : formatMetric(task.urgency)}
+                </td>
                 <td className="metric-cell">{formatMetric(task.importance)}</td>
                 <td className="metric-cell">
                   <span
