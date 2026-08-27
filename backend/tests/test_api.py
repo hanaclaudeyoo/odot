@@ -44,6 +44,7 @@ def create_task(
     category_id: int | None = None,
     deadline_at: str | None = None,
     tag_ids: list[int] | None = None,
+    start_window_at: str | None = None,
 ):
     payload = {
         "title": title,
@@ -60,6 +61,8 @@ def create_task(
         deadline_at = deadline_for_urgency(urgency, datetime.now(timezone.utc))
     if deadline_at is not None:
         payload["deadline_at"] = deadline_at
+    if start_window_at is not None:
+        payload["start_window_at"] = start_window_at
     response = client.post(
         "/tasks",
         json=payload,
@@ -182,6 +185,7 @@ def test_deadline_tomorrow_sets_urgency_to_seven(client, monkeypatch):
     import app.main as main
 
     current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+
     monkeypatch.setattr(main, "now_utc", lambda: current_time)
 
     task = create_task(
@@ -194,6 +198,14 @@ def test_deadline_tomorrow_sets_urgency_to_seven(client, monkeypatch):
     )
 
     assert task["urgency"] == 7
+
+
+def test_task_start_window_is_stored(client):
+    start_window = datetime(2026, 1, 2, 12, tzinfo=timezone.utc).isoformat()
+
+    task = create_task(client, "Start later", 5, 5, 5, start_window_at=start_window)
+
+    assert task["start_window_at"] == start_window
 
 
 def test_clearing_deadline_returns_task_to_not_due_soon(client, monkeypatch):
@@ -292,13 +304,22 @@ def test_complete_clears_an_active_session_for_that_task(client):
     assert client.get("/session").json() is None
 
 
-def test_complete_requires_a_positive_duration(client):
+def test_complete_can_archive_with_unknown_duration(client):
+    task = create_task(client, "Unknown duration", 5, 5, 3)
+
+    response = client.post(f"/tasks/{task['id']}/complete", json={})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "archived"
+    assert response.json()["actual_duration_seconds"] is None
+
+
+def test_complete_rejects_zero_duration(client):
     task = create_task(client, "Bad duration", 5, 5, 3)
 
     assert client.post(
         f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 0}
     ).status_code == 422
-    assert client.post(f"/tasks/{task['id']}/complete", json={}).status_code == 422
 
 
 def test_complete_rejects_an_already_archived_task(client):
@@ -308,6 +329,21 @@ def test_complete_rejects_an_already_archived_task(client):
     response = client.post(f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 5})
 
     assert response.status_code == 404
+
+
+def test_update_can_edit_archived_task(client):
+    task = create_task(client, "Archived before edit", 5, 5, 3)
+    client.post(f"/tasks/{task['id']}/complete", json={"actual_duration_minutes": 5})
+
+    response = client.patch(
+        f"/tasks/{task['id']}",
+        json={"title": "Edited archived task", "importance": 7.25},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "archived"
+    assert response.json()["title"] == "Edited archived task"
+    assert response.json()["importance"] == 7.25
 
 
 def test_restore_returns_archived_task_to_active(client):
@@ -562,6 +598,75 @@ def test_pull_blocks_when_session_exists(client):
     assert client.post("/tasks/pull", json={"energy_level": 5}).status_code == 409
 
 
+def test_pull_respects_category_filter_including_descendants(client):
+    parent = create_category(client, "Parent")
+    child = create_category(client, "Child", parent["id"])
+    other = create_category(client, "Other")
+    create_task(client, "Outside but higher priority", 10, 10, 0, category_id=other["id"])
+    child_task = create_task(client, "Inside child", 1, 1, 0, category_id=child["id"])
+
+    response = client.post(
+        "/tasks/pull",
+        json={"energy_level": 5, "category_id": parent["id"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["task"]["id"] == child_task["id"]
+
+
+def test_pull_category_filter_returns_404_when_no_candidates(client):
+    empty_category = create_category(client, "Empty")
+    other_category = create_category(client, "Other")
+    create_task(client, "Other task", 10, 10, 0, category_id=other_category["id"])
+
+    response = client.post(
+        "/tasks/pull",
+        json={"energy_level": 5, "category_id": empty_category["id"]},
+    )
+
+    assert response.status_code == 404
+
+
+def test_pull_excludes_tasks_before_start_window(client, monkeypatch):
+    import app.main as main
+
+    current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "now_utc", lambda: current_time)
+    create_task(
+        client,
+        "Blocked high priority",
+        10,
+        10,
+        0,
+        start_window_at=(current_time + timedelta(days=1)).isoformat(),
+    )
+    available = create_task(client, "Available lower priority", 1, 1, 0)
+
+    response = client.post("/tasks/pull", json={"energy_level": 5})
+
+    assert response.status_code == 200
+    assert response.json()["task"]["id"] == available["id"]
+
+
+def test_pull_returns_404_when_all_tasks_before_start_window(client, monkeypatch):
+    import app.main as main
+
+    current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "now_utc", lambda: current_time)
+    create_task(
+        client,
+        "Blocked only",
+        10,
+        10,
+        0,
+        start_window_at=(current_time + timedelta(days=1)).isoformat(),
+    )
+
+    response = client.post("/tasks/pull", json={"energy_level": 5})
+
+    assert response.status_code == 404
+
+
 def test_start_task_starts_specific_active_task(client):
     create_task(client, "Other", 10, 10, 10)
     task = create_task(client, "Start this one", 0, 0, 0)
@@ -579,6 +684,25 @@ def test_start_task_blocks_when_session_exists(client):
 
     assert client.post(f"/tasks/{first['id']}/start").status_code == 200
     assert client.post(f"/tasks/{second['id']}/start").status_code == 409
+
+
+def test_start_task_fails_before_start_window(client, monkeypatch):
+    import app.main as main
+
+    current_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "now_utc", lambda: current_time)
+    task = create_task(
+        client,
+        "Cannot start yet",
+        5,
+        5,
+        5,
+        start_window_at=(current_time + timedelta(hours=1)).isoformat(),
+    )
+
+    response = client.post(f"/tasks/{task['id']}/start")
+
+    assert response.status_code == 403
 
 
 def test_decline_update_clears_session_before_five_minutes(client):

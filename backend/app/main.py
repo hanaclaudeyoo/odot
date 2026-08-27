@@ -105,6 +105,13 @@ def task_urgency(task: Row | dict, reference_time: datetime) -> float:
     return deadline_urgency(hours_until_deadline)
 
 
+def start_window_is_open(task: Row | dict) -> bool:
+    start_window_at = task["start_window_at"]
+    if start_window_at is None:
+        return True
+    return parse_dt(start_window_at) <= now_utc()
+
+
 def task_data_from_row(row: Row) -> dict:
     data = dict(row)
     # Archived tasks freeze at the urgency they had when they were archived; active
@@ -479,11 +486,12 @@ def create_task(payload: TaskCreate) -> Task:
                 difficulty,
                 time_estimate_minutes,
                 deadline_at,
+                start_window_at,
                 category_id,
                 status,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
             """,
             (
                 payload.title,
@@ -492,6 +500,7 @@ def create_task(payload: TaskCreate) -> Task:
                 payload.difficulty,
                 payload.time_estimate_minutes,
                 payload.deadline_at,
+                payload.start_window_at,
                 payload.category_id,
                 iso_now(),
             ),
@@ -513,20 +522,17 @@ def update_task(task_id: int, payload: TaskUpdate) -> Task:
             return task_from_row(row, task_tag_ids(db, task_id))
 
     with connect() as db:
-        if "category_id" in updates:
+        current = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if "category_id" in updates and updates["category_id"] != current["category_id"]:
             ensure_category_exists(db, updates["category_id"])
         if updates:
             assignments = ", ".join(f"{key} = ?" for key in updates)
             values = [*updates.values(), task_id]
-            cursor = db.execute(
-                f"UPDATE tasks SET {assignments} WHERE id = ? AND status = 'active'", values
-            )
+            cursor = db.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", values)
             if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Active task not found")
-        elif db.execute(
-            "SELECT 1 FROM tasks WHERE id = ? AND status = 'active'", (task_id,)
-        ).fetchone() is None:
-            raise HTTPException(status_code=404, detail="Active task not found")
+                raise HTTPException(status_code=404, detail="Task not found")
         if tag_ids is not None:
             replace_task_tags(db, task_id, tag_ids)
         row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -557,6 +563,11 @@ def delete_task(task_id: int) -> None:
 @app.post("/tasks/{task_id}/complete", response_model=Task)
 def complete_task(task_id: int, payload: CompleteRequest) -> Task:
     """Archive an active task with a hand-entered duration, bypassing the pull session."""
+    actual_duration_seconds = (
+        payload.actual_duration_minutes * 60
+        if payload.actual_duration_minutes is not None
+        else None
+    )
     with connect() as db:
         snapshot = category_snapshot_for_task(db, task_id)
         cursor = db.execute(
@@ -568,7 +579,7 @@ def complete_task(task_id: int, payload: CompleteRequest) -> Task:
                 category_snapshot = COALESCE(category_snapshot, ?)
             WHERE id = ? AND status = 'active'
             """,
-            (iso_now(), payload.actual_duration_minutes * 60, snapshot, task_id),
+            (iso_now(), actual_duration_seconds, snapshot, task_id),
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Active task not found")
@@ -616,7 +627,28 @@ def pull_task(payload: PullRequest) -> ActiveSession:
         raise HTTPException(status_code=409, detail="A task is already in progress")
 
     with connect() as db:
-        tasks = db.execute("SELECT * FROM tasks WHERE status = 'active'").fetchall()
+        if payload.category_id is None:
+            tasks = db.execute(
+                """
+                SELECT *
+                FROM tasks
+                WHERE status = 'active'
+                """
+            ).fetchall()
+        else:
+            ensure_category_exists(db, payload.category_id)
+            subtree_ids = category_descendant_ids(db, payload.category_id)
+            placeholders = ", ".join("?" for _ in subtree_ids)
+            tasks = db.execute(
+                f"""
+                SELECT *
+                FROM tasks
+                WHERE status = 'active'
+                  AND category_id IN ({placeholders})
+                """,
+                subtree_ids,
+            ).fetchall()
+        tasks = [task for task in tasks if start_window_is_open(task)]
         if not tasks:
             raise HTTPException(status_code=404, detail="No active tasks available")
 
@@ -640,10 +672,12 @@ def start_task(task_id: int) -> ActiveSession:
 
     with connect() as db:
         task = db.execute(
-            "SELECT id FROM tasks WHERE id = ? AND status = 'active'", (task_id,)
+            "SELECT * FROM tasks WHERE id = ? AND status = 'active'", (task_id,)
         ).fetchone()
         if task is None:
             raise HTTPException(status_code=404, detail="Active task not found")
+        if not start_window_is_open(task):
+            raise HTTPException(status_code=403, detail="Task cannot be started before its start window")
 
         db.execute(
             "INSERT INTO active_session (id, task_id, started_at) VALUES (1, ?, ?)",

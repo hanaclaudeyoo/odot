@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     difficulty REAL NOT NULL CHECK (difficulty BETWEEN 0 AND 10),
     time_estimate_minutes INTEGER NOT NULL CHECK (time_estimate_minutes > 0),
     deadline_at TEXT,
+    start_window_at TEXT,
     category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
     category_snapshot TEXT,
     status TEXT NOT NULL CHECK (status IN ('active', 'archived', 'deleted')) DEFAULT 'active',
@@ -123,6 +124,7 @@ def _migrate_tasks_schema(db: sqlite3.Connection) -> None:
     category_id_expr = "category_id" if "category_id" in columns else "NULL"
     category_snapshot_expr = "category_snapshot" if "category_snapshot" in columns else "NULL"
     deadline_at_expr = "deadline_at" if "deadline_at" in columns else "NULL"
+    start_window_at_expr = "start_window_at" if "start_window_at" in columns else "NULL"
     db.execute(
         f"""
         INSERT INTO tasks (
@@ -133,6 +135,7 @@ def _migrate_tasks_schema(db: sqlite3.Connection) -> None:
             difficulty,
             time_estimate_minutes,
             deadline_at,
+            start_window_at,
             category_id,
             category_snapshot,
             status,
@@ -148,6 +151,7 @@ def _migrate_tasks_schema(db: sqlite3.Connection) -> None:
             CAST(difficulty AS REAL),
             time_estimate_minutes,
             {deadline_at_expr},
+            {start_window_at_expr},
             {category_id_expr},
             {category_snapshot_expr},
             status,
@@ -180,6 +184,7 @@ def init_db() -> None:
             or "category_id" not in task_sql
             or "category_snapshot" not in task_sql
             or "deadline_at" not in task_sql
+            or "start_window_at" not in task_sql
         ):
             _migrate_tasks_schema(db)
         else:

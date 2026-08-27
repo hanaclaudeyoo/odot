@@ -250,6 +250,31 @@ h2 {
   opacity: 1;
 }
 
+.start-window-field {
+  gap: 8px;
+}
+
+.start-window-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.start-window-toggle {
+  background: transparent;
+  border-color: transparent;
+  color: #687586;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  width: 26px;
+}
+
+.start-window-toggle:hover {
+  background: #eef4f7;
+  color: #176b87;
+}
+
 .field span,
 .axis-control span {
   color: #536172;
@@ -745,6 +770,10 @@ th {
   width: 1%;
 }
 
+.date-cell {
+  white-space: nowrap;
+}
+
 .category-cell {
   color: #5b6776;
   font-size: 12px;
@@ -1108,10 +1137,22 @@ th {
 }
 
 .category-count {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
   color: #8793a1;
   font-size: 11px;
+  font-weight: 400;
+  height: 24px;
+  min-height: 24px;
   min-width: 16px;
+  padding: 2px 4px;
   text-align: right;
+}
+
+.category-count:hover {
+  background: #eef4f7;
+  color: #176b87;
 }
 
 .category-meta {
@@ -1120,6 +1161,72 @@ th {
   gap: 2px;
   justify-self: end;
   padding-right: 28px;
+  position: relative;
+}
+
+.category-task-popup {
+  background: #ffffff;
+  border: 1px solid #d9e1e8;
+  border-radius: 8px;
+  box-shadow: 0 14px 35px rgba(15, 23, 42, 0.16);
+  color: #27313f;
+  min-width: 220px;
+  max-width: min(360px, 70vw);
+  padding: 10px;
+  position: absolute;
+  right: 24px;
+  top: 30px;
+  z-index: 20;
+}
+
+.category-task-popup-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.category-task-popup-heading span {
+  color: #536172;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-task-popup-close {
+  background: transparent;
+  border-color: transparent;
+  color: #687586;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  width: 24px;
+}
+
+.category-task-popup-close:hover {
+  background: #eef4f7;
+}
+
+.category-task-popup ul {
+  display: grid;
+  gap: 5px;
+  list-style: none;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 0;
+}
+
+.category-task-popup li,
+.category-task-popup p {
+  color: #27313f;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  margin: 0;
 }
 
 .category-actions {

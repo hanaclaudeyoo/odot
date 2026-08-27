@@ -11,6 +11,7 @@ import {
   Home,
   Menu,
   MoreVertical,
+  Minus,
   Plus,
   Trash2,
   X,
@@ -27,6 +28,7 @@ type Task = {
   difficulty: number;
   time_estimate_minutes: number;
   deadline_at: string | null;
+  start_window_at: string | null;
   category_id: number | null;
   tag_ids: number[];
   category_snapshot: string | null;
@@ -62,6 +64,7 @@ type TaskDraft = {
   importance: number;
   difficulty: number;
   deadline_at: string;
+  start_window_at: string;
   time_estimate_minutes: string;
   tag_ids: number[];
 };
@@ -74,6 +77,7 @@ const emptyDraft: TaskDraft = {
   importance: 5,
   difficulty: 5,
   deadline_at: "",
+  start_window_at: "",
   time_estimate_minutes: "30",
   tag_ids: [],
 };
@@ -122,6 +126,23 @@ function formatElapsed(seconds: number): string {
 
 function formatEstimateDuration(minutes: number): string {
   return `${minutes.toString().padStart(2, "0")}:00`;
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function formatMetric(value: number): string {
@@ -199,6 +220,7 @@ function taskPayloadFromDraft(draft: TaskDraft) {
   return {
     ...draft,
     deadline_at: draft.deadline_at ? new Date(draft.deadline_at).toISOString() : null,
+    start_window_at: draft.start_window_at ? new Date(draft.start_window_at).toISOString() : null,
     time_estimate_minutes: minutes,
   };
 }
@@ -210,6 +232,7 @@ function draftFromTask(task: Task): TaskDraft {
     importance: task.importance,
     difficulty: task.difficulty,
     deadline_at: deadlineInputValue(task.deadline_at),
+    start_window_at: deadlineInputValue(task.start_window_at),
     time_estimate_minutes: String(task.time_estimate_minutes),
     tag_ids: task.tag_ids,
   };
@@ -395,6 +418,52 @@ function TagPicker({
             </button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function StartWindowInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(Boolean(value));
+
+  useEffect(() => {
+    if (value) {
+      setExpanded(true);
+    }
+  }, [value]);
+
+  return (
+    <div className="field start-window-field">
+      <div className="start-window-header">
+        <span>Start Window</span>
+        <button
+          className="start-window-toggle"
+          type="button"
+          onClick={() => {
+            if (expanded) {
+              onChange("");
+              setExpanded(false);
+            } else {
+              setExpanded(true);
+            }
+          }}
+          title={expanded ? "Remove start window" : "Add start window"}
+        >
+          {expanded ? <Minus size={14} /> : <Plus size={14} />}
+        </button>
+      </div>
+      {expanded && (
+        <input
+          type="datetime-local"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
       )}
     </div>
   );
@@ -635,14 +704,13 @@ function TaskForm({
   onChange: (draft: TaskDraft) => void;
   onErrorChange: (error: string) => void;
   onDelete?: () => void;
-  onFinish?: (minutes: number) => void;
+  onFinish?: (minutes: number | null) => void;
   onStart?: () => void;
   onSubmit: () => void;
   onCancel?: () => void;
 }) {
   const [finishPromptOpen, setFinishPromptOpen] = useState(false);
   const [finishMinutes, setFinishMinutes] = useState("");
-  const [finishError, setFinishError] = useState("");
 
   function validateEstimate(): boolean {
     if (parseTimeEstimate(draft.time_estimate_minutes) === null) {
@@ -656,16 +724,11 @@ function TaskForm({
   function openFinishPrompt() {
     // Seed with the estimate, which is usually close to the real answer.
     setFinishMinutes(draft.time_estimate_minutes);
-    setFinishError("");
     setFinishPromptOpen(true);
   }
 
   function confirmFinish() {
     const minutes = parseTimeEstimate(finishMinutes);
-    if (minutes === null) {
-      setFinishError("Enter a positive whole number of minutes.");
-      return;
-    }
     setFinishPromptOpen(false);
     onFinish?.(minutes);
   }
@@ -743,6 +806,10 @@ function TaskForm({
         />
         <span>min</span>
       </label>
+      <StartWindowInput
+        value={draft.start_window_at}
+        onChange={(start_window_at) => onChange({ ...draft, start_window_at })}
+      />
       <div className="field">
         <span>Tags</span>
         <TagPicker
@@ -806,7 +873,6 @@ function TaskForm({
                 <X size={16} />
               </button>
             </div>
-            {finishError && <p className="error modal-error">{finishError}</p>}
             <label className="field compact-field">
               <span>Time Taken</span>
               <input
@@ -817,7 +883,6 @@ function TaskForm({
                 value={finishMinutes}
                 onChange={(event) => {
                   if (/^\d*$/.test(event.target.value)) {
-                    setFinishError("");
                     setFinishMinutes(event.target.value);
                   }
                 }}
@@ -831,13 +896,6 @@ function TaskForm({
               <span>min</span>
             </label>
             <div className="form-actions">
-              <button
-                className="secondary"
-                type="button"
-                onClick={() => setFinishPromptOpen(false)}
-              >
-                Cancel
-              </button>
               <button type="button" onClick={confirmFinish}>
                 Finish
               </button>
@@ -867,7 +925,9 @@ function TaskTable({
   const [sortKey, setSortKey] = useState<TaskSortKey>("urgency");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const sorted = [...tasks].sort((a, b) => {
-    const delta = a[sortKey] - b[sortKey];
+    const leftValue = a[sortKey];
+    const rightValue = b[sortKey];
+    const delta = leftValue - rightValue;
     return sortDir === "asc" ? delta : -delta;
   });
 
@@ -988,7 +1048,8 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
         {tasks.map((task) => {
           const isSelected = selectedTaskId === task.id;
           const taskColor = difficultyColor(task.difficulty);
-          const xPercent = matrixPercent(task.urgency);
+          const taskUrgency = task.urgency;
+          const xPercent = matrixPercent(taskUrgency);
           const yPercent = matrixPercent(task.importance);
           const estimatedPopupWidth = Math.min(
             420,
@@ -1007,7 +1068,7 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
               ]
                 .filter(Boolean)
                 .join(" ")}
-              title={`${task.title} · urgency ${formatMetric(task.urgency)} · importance ${formatMetric(task.importance)} · difficulty ${formatMetric(task.difficulty)}`}
+              title={`${task.title} · urgency ${formatMetric(taskUrgency)} · importance ${formatMetric(task.importance)} · difficulty ${formatMetric(task.difficulty)}`}
               aria-label={isSelected ? `Hide details for ${task.title}` : `Show details for ${task.title}`}
               type="button"
               onClick={() => setSelectedTaskId(isSelected ? null : task.id)}
@@ -1028,7 +1089,7 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
                 </span>
                 {isSelected && (
                   <span className="matrix-task-metrics-popover">
-                    <span>Urgency {formatMetric(task.urgency)}</span>
+                    <span>Urgency {formatMetric(taskUrgency)}</span>
                     <span>Importance {formatMetric(task.importance)}</span>
                     <span>Difficulty {formatMetric(task.difficulty)}</span>
                     <span>Category {categoryName(task.category_id, categories)}</span>
@@ -1044,7 +1105,15 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
   );
 }
 
-function ArchiveRowMenu({ onRestore, onDelete }: { onRestore: () => void; onDelete: () => void }) {
+function ArchiveRowMenu({
+  onEdit,
+  onRestore,
+  onDelete,
+}: {
+  onEdit: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+}) {
   // The archive table scrolls, which would clip an absolutely positioned popover, so the
   // menu is fixed-positioned against the trigger and closed whenever the page moves.
   const [menuPosition, setMenuPosition] = useState<{ top: number; right: number } | null>(null);
@@ -1109,6 +1178,16 @@ function ArchiveRowMenu({ onRestore, onDelete }: { onRestore: () => void; onDele
             role="menuitem"
             onClick={() => {
               setMenuPosition(null);
+              onEdit();
+            }}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenuPosition(null);
               onRestore();
             }}
           >
@@ -1134,11 +1213,13 @@ function ArchiveRowMenu({ onRestore, onDelete }: { onRestore: () => void; onDele
 function ArchiveList({
   tasks,
   categories,
+  onEdit,
   onRestore,
   onPurge,
 }: {
   tasks: Task[];
   categories: Category[];
+  onEdit: (task: Task) => void;
   onRestore: (task: Task) => void;
   onPurge: (task: Task) => void;
 }) {
@@ -1156,6 +1237,8 @@ function ArchiveList({
             <th className="metric-header">Difficulty</th>
             <th className="time-header">Estimate</th>
             <th>Actual</th>
+            <th>Created</th>
+            <th>Archived</th>
             <th className="row-menu-header" aria-label="Actions" />
           </tr>
         </thead>
@@ -1171,8 +1254,11 @@ function ArchiveList({
               <td className="metric-cell">{formatMetric(task.difficulty)}</td>
               <td className="time-cell">{formatEstimateDuration(task.time_estimate_minutes)}</td>
               <td>{task.actual_duration_seconds === null ? "-" : formatElapsed(task.actual_duration_seconds)}</td>
+              <td className="date-cell">{formatDateTime(task.created_at)}</td>
+              <td className="date-cell">{formatDateTime(task.archived_at)}</td>
               <td className="row-menu-cell">
                 <ArchiveRowMenu
+                  onEdit={() => onEdit(task)}
                   onRestore={() => onRestore(task)}
                   onDelete={() => setPendingPurge(task)}
                 />
@@ -1239,6 +1325,7 @@ function PulledTask({
     (new Date(session.decline_available_until).getTime() - now) / 1000,
   );
   const canDecline = declineSecondsLeft > 0;
+  const taskUrgency = session.task.urgency;
 
   return (
     <main className="focus-layout">
@@ -1251,7 +1338,7 @@ function PulledTask({
           <div className="timer-estimate">Estimate: {session.task.time_estimate_minutes}m</div>
         </div>
         <div className="task-metrics">
-          <span>Urgency {formatMetric(session.task.urgency)}</span>
+          <span>Urgency {formatMetric(taskUrgency)}</span>
           <span>Importance {formatMetric(session.task.importance)}</span>
           <span>Difficulty {formatMetric(session.task.difficulty)}</span>
         </div>
@@ -1409,7 +1496,7 @@ function TaskModal({
   onChange: (draft: TaskDraft) => void;
   onErrorChange: (error: string) => void;
   onDelete: () => void;
-  onFinish?: (minutes: number) => void;
+  onFinish?: (minutes: number | null) => void;
   onStart?: () => void;
   onSubmit: () => void;
   onClose: () => void;
@@ -1466,6 +1553,7 @@ function CategoriesPage({
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropHint, setDropHint] = useState<DropHint>(null);
   const [collapsedIds, setCollapsedIds] = useState<Set<number>>(new Set());
+  const [taskListCategoryId, setTaskListCategoryId] = useState<number | null>(null);
   const [deleteWarning, setDeleteWarning] = useState<{
     category: Category;
     activeTaskCount: number;
@@ -1474,6 +1562,7 @@ function CategoriesPage({
   useEffect(() => {
     const ids = new Set(categories.map((category) => category.id));
     setCollapsedIds((current) => new Set([...current].filter((id) => ids.has(id))));
+    setTaskListCategoryId((current) => (current !== null && ids.has(current) ? current : null));
   }, [categories]);
 
   async function createCategory(parentId: number | null) {
@@ -1587,6 +1676,10 @@ function CategoriesPage({
     return tasks.filter((task) => task.category_id === categoryId).length;
   }
 
+  function directTasks(categoryId: number): Task[] {
+    return tasks.filter((task) => task.category_id === categoryId);
+  }
+
   function expandableCategoryIds(): number[] {
     return categories
       .filter((category) => childrenOf(categories, category.id).length > 0)
@@ -1683,12 +1776,14 @@ function CategoriesPage({
     return (
       <>
         {levelCategories.map((category) => {
-          const taskCount = directTaskCount(category.id);
+          const categoryTasks = directTasks(category.id);
+          const taskCount = categoryTasks.length;
           const childCategories = childrenOf(categories, category.id);
           const hasChildren = childCategories.length > 0;
           const isCollapsed = collapsedIds.has(category.id);
           const isRenaming = renameId === category.id;
           const isDropTarget = dropHint?.targetId === category.id;
+          const isTaskListOpen = taskListCategoryId === category.id;
           return (
             <div className="category-branch" key={category.id}>
               <div
@@ -1791,7 +1886,40 @@ function CategoriesPage({
                       </>
                     )}
                   </div>
-                  <span className="category-count">{taskCount}</span>
+                  <button
+                    className="category-count"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setTaskListCategoryId(isTaskListOpen ? null : category.id);
+                    }}
+                  >
+                    {taskCount}
+                  </button>
+                  {isTaskListOpen && (
+                    <div className="category-task-popup" onClick={(event) => event.stopPropagation()}>
+                      <div className="category-task-popup-heading">
+                        <span>{category.name}</span>
+                        <button
+                          className="category-task-popup-close"
+                          type="button"
+                          title="Close task list"
+                          onClick={() => setTaskListCategoryId(null)}
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                      {categoryTasks.length > 0 ? (
+                        <ul>
+                          {categoryTasks.map((task) => (
+                            <li key={task.id}>{task.title}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>No tasks.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               {!isCollapsed && renderRows(category.id, depth + 1)}
@@ -1995,7 +2123,7 @@ function App() {
     }
   }
 
-  async function finishEditingTask(minutes: number) {
+  async function finishEditingTask(minutes: number | null) {
     if (!editingTask) return;
     setTaskModalError("");
     try {
@@ -2044,7 +2172,7 @@ function App() {
     try {
       const pulled = await api<Session>("/tasks/pull", {
         method: "POST",
-        body: JSON.stringify({ energy_level: energyLevel }),
+        body: JSON.stringify({ energy_level: energyLevel, category_id: categoryFilter }),
       });
       setSession(pulled);
       setDeclineEditing(false);
@@ -2145,6 +2273,7 @@ function App() {
           <ArchiveList
             tasks={archivedTasks}
             categories={categories}
+            onEdit={openEditTaskModal}
             onRestore={restoreTask}
             onPurge={purgeTask}
           />
@@ -2166,12 +2295,12 @@ function App() {
           tags={tags}
           submitLabel={editingTask ? "Save" : "Add Task"}
           error={taskModalError}
-          canDelete={editingTask !== null}
+          canDelete={editingTask?.status === "active"}
           onChange={setDraft}
           onErrorChange={setTaskModalError}
           onDelete={deleteEditingTask}
-          onFinish={editingTask ? finishEditingTask : undefined}
-          onStart={editingTask ? startEditingTask : undefined}
+          onFinish={editingTask?.status === "active" ? finishEditingTask : undefined}
+          onStart={editingTask?.status === "active" ? startEditingTask : undefined}
           onSubmit={submitTask}
           onClose={closeTaskModal}
         />

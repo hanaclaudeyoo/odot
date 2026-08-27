@@ -50,3 +50,19 @@ Build the frontend:
 ```sh
 npm run frontend:build
 ```
+
+## Database Import/Export
+
+Export the current database to a SQL dump:
+
+```sh
+python3 scripts/db_io.py export --out scripts/odot-dump.sql
+```
+
+Import a SQL dump into the current database:
+
+```sh
+python3 scripts/db_io.py import scripts/odot-dump.sql
+```
+
+Both commands default to the app database, or `ODOT_DB_PATH` if set. Import replaces existing data and creates a `.bak` backup first.

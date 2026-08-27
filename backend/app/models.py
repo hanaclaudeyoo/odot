@@ -15,6 +15,7 @@ class TaskBase(BaseModel):
     difficulty: AxisValue = Field(ge=0, le=10)
     time_estimate_minutes: int = Field(gt=0)
     deadline_at: str | None = None
+    start_window_at: str | None = None
     category_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
 
@@ -29,16 +30,25 @@ class TaskBase(BaseModel):
     @field_validator("deadline_at")
     @classmethod
     def validate_deadline_at(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        deadline = value.strip()
-        if not deadline:
-            return None
-        try:
-            datetime.fromisoformat(deadline)
-        except ValueError as exc:
-            raise ValueError("deadline must be a valid ISO datetime") from exc
-        return deadline
+        return clean_optional_datetime(value, "deadline")
+
+    @field_validator("start_window_at")
+    @classmethod
+    def validate_start_window_at(cls, value: str | None) -> str | None:
+        return clean_optional_datetime(value, "start window")
+
+
+def clean_optional_datetime(value: str | None, label: str) -> str | None:
+    if value is None:
+        return None
+    timestamp = value.strip()
+    if not timestamp:
+        return None
+    try:
+        datetime.fromisoformat(timestamp)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid ISO datetime") from exc
+    return timestamp
 
 
 class TaskCreate(TaskBase):
@@ -54,6 +64,7 @@ class TaskUpdate(BaseModel):
     difficulty: AxisValue | None = Field(default=None, ge=0, le=10)
     time_estimate_minutes: int | None = Field(default=None, gt=0)
     deadline_at: str | None = None
+    start_window_at: str | None = None
     category_id: int | None = None
     tag_ids: list[int] | None = None
 
@@ -70,16 +81,12 @@ class TaskUpdate(BaseModel):
     @field_validator("deadline_at")
     @classmethod
     def validate_optional_deadline_at(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        deadline = value.strip()
-        if not deadline:
-            return None
-        try:
-            datetime.fromisoformat(deadline)
-        except ValueError as exc:
-            raise ValueError("deadline must be a valid ISO datetime") from exc
-        return deadline
+        return clean_optional_datetime(value, "deadline")
+
+    @field_validator("start_window_at")
+    @classmethod
+    def validate_optional_start_window_at(cls, value: str | None) -> str | None:
+        return clean_optional_datetime(value, "start window")
 
 
 class Task(TaskBase):
@@ -149,6 +156,7 @@ class CategoryDeletePreview(BaseModel):
 
 class PullRequest(BaseModel):
     energy_level: AxisValue = Field(ge=0, le=10)
+    category_id: int | None = None
 
 
 class ActiveSession(BaseModel):
@@ -160,7 +168,7 @@ class ActiveSession(BaseModel):
 class CompleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    actual_duration_minutes: int = Field(gt=0)
+    actual_duration_minutes: int | None = Field(default=None, gt=0)
 
 
 class DeclineEditRequest(BaseModel):
