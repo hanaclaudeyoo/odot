@@ -29,8 +29,8 @@ type Task = {
   time_estimate_minutes: number;
   deadline_at: string | null;
   start_window_at: string | null;
+  dependency_ids: number[];
   category_id: number | null;
-  tag_ids: number[];
   category_snapshot: string | null;
   status: TaskStatus;
   created_at: string;
@@ -46,12 +46,6 @@ type Category = {
   created_at: string;
 };
 
-type Tag = {
-  id: number;
-  name: string;
-  sort_order: number;
-};
-
 type Session = {
   task: Task;
   started_at: string;
@@ -65,8 +59,8 @@ type TaskDraft = {
   difficulty: number;
   deadline_at: string;
   start_window_at: string;
+  dependency_ids: number[];
   time_estimate_minutes: string;
-  tag_ids: number[];
 };
 
 type TaskSortKey = "importance" | "urgency" | "difficulty" | "time_estimate_minutes";
@@ -78,8 +72,8 @@ const emptyDraft: TaskDraft = {
   difficulty: 5,
   deadline_at: "",
   start_window_at: "",
+  dependency_ids: [],
   time_estimate_minutes: "30",
-  tag_ids: [],
 };
 
 const axisTicks = [1, 2, 3, 4, 6, 7, 8, 9, 10];
@@ -259,8 +253,8 @@ function draftFromTask(task: Task): TaskDraft {
     difficulty: task.difficulty,
     deadline_at: deadlineInputValue(task.deadline_at),
     start_window_at: deadlineInputValue(task.start_window_at),
+    dependency_ids: task.dependency_ids,
     time_estimate_minutes: String(task.time_estimate_minutes),
-    tag_ids: task.tag_ids,
   };
 }
 
@@ -371,84 +365,6 @@ function UrgencyInput({
   );
 }
 
-function TagPill({ name }: { name: string }) {
-  return <span className="tag-pill">{name}</span>;
-}
-
-function TagPicker({
-  value,
-  tags,
-  onChange,
-}: {
-  value: number[];
-  tags: Tag[];
-  onChange: (tagIds: number[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [pendingTagIds, setPendingTagIds] = useState<number[]>(value);
-  const selectedTags = tags.filter((tag) => value.includes(tag.id));
-
-  function openPicker() {
-    setPendingTagIds(value);
-    setOpen(true);
-  }
-
-  function toggle(tagId: number) {
-    setPendingTagIds((current) =>
-      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
-    );
-  }
-
-  return (
-    <div className="tag-picker">
-      <button className="tag-picker-trigger" type="button" onClick={openPicker}>
-        {selectedTags.length === 0 ? (
-          <span className="tag-picker-placeholder">No tags</span>
-        ) : (
-          <span className="tag-pill-row">
-            {selectedTags.map((tag) => (
-              <TagPill key={tag.id} name={tag.name} />
-            ))}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div className="tag-picker-popover">
-          <ul className="tag-option-list">
-            {tags.map((tag) => (
-              <li key={tag.id}>
-                <label className="tag-option">
-                  <input
-                    type="checkbox"
-                    checked={pendingTagIds.includes(tag.id)}
-                    onChange={() => toggle(tag.id)}
-                  />
-                  <TagPill name={tag.name} />
-                </label>
-              </li>
-            ))}
-          </ul>
-          <div className="tag-picker-actions">
-            <button className="secondary" type="button" onClick={() => setOpen(false)}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                // Emit in the tags' display order so the value is stable.
-                onChange(tags.filter((tag) => pendingTagIds.includes(tag.id)).map((tag) => tag.id));
-                setOpen(false);
-              }}
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function StartWindowInput({
   value,
   onChange,
@@ -490,6 +406,161 @@ function StartWindowInput({
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
+      )}
+    </div>
+  );
+}
+
+function DependencyPicker({
+  value,
+  tasks,
+  currentTaskId,
+  onChange,
+}: {
+  value: number[];
+  tasks: Task[];
+  currentTaskId?: number;
+  onChange: (dependencyIds: number[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState(value.length > 0);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const options = tasks
+    .filter((task) => task.status === "active" && task.id !== currentTaskId)
+    .sort((a, b) => a.title.localeCompare(b.title));
+  const optionIds = new Set(options.map((task) => task.id));
+  const selectedTasks = value
+    .map((id) => options.find((task) => task.id === id))
+    .filter((task): task is Task => task !== undefined);
+  const filteredOptions = options.filter((task) =>
+    task.title.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+
+  useEffect(() => {
+    const validValue = value.filter((id) => optionIds.has(id));
+    if (validValue.length !== value.length) {
+      onChange(validValue);
+    }
+  }, [tasks, currentTaskId]);
+
+  useEffect(() => {
+    if (value.length > 0) {
+      setExpanded(true);
+    }
+  }, [value.length]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!pickerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [open]);
+
+  function toggleDependency(taskId: number) {
+    onChange(
+      value.includes(taskId)
+        ? value.filter((id) => id !== taskId)
+        : [...value, taskId],
+    );
+  }
+
+  return (
+    <div className="field dependency-field">
+      <div className="dependency-header">
+        <span>Depends On</span>
+        <button
+          className="dependency-toggle"
+          type="button"
+          onClick={() => {
+            if (expanded) {
+              onChange([]);
+              setQuery("");
+              setOpen(false);
+              setExpanded(false);
+            } else {
+              setExpanded(true);
+              setOpen(true);
+            }
+          }}
+          title={expanded ? "Remove dependencies" : "Add dependencies"}
+        >
+          {expanded ? <Minus size={14} /> : <Plus size={14} />}
+        </button>
+      </div>
+      {expanded && (
+        <div className="dependency-picker" ref={pickerRef}>
+          <div className="dependency-input-shell" onClick={() => setOpen(true)}>
+            {selectedTasks.map((task) => (
+              <button
+                className="dependency-chip"
+                key={task.id}
+                type="button"
+                onClick={() => toggleDependency(task.id)}
+                title={`Remove ${task.title}`}
+              >
+                {task.title}
+                <X size={12} />
+              </button>
+            ))}
+            <input
+              type="text"
+              value={query}
+              onFocus={() => setOpen(true)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setOpen(true);
+              }}
+              placeholder={selectedTasks.length === 0 ? "Search tasks..." : ""}
+            />
+          </div>
+          {open && (
+            <div className="dependency-popover">
+              {filteredOptions.length > 0 ? (
+                filteredOptions.map((task) => (
+                  <label className="dependency-option" key={task.id}>
+                    <input
+                      type="checkbox"
+                      checked={value.includes(task.id)}
+                      onChange={() => toggleDependency(task.id)}
+                    />
+                    <span>{task.title}</span>
+                  </label>
+                ))
+              ) : (
+                <p>No matching tasks.</p>
+              )}
+              <div className="dependency-actions">
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    onChange([]);
+                  }}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -711,7 +782,8 @@ function CategoryFilterPicker({
 function TaskForm({
   draft,
   categories,
-  tags,
+  dependencyOptions,
+  currentTaskId,
   submitLabel,
   canDelete,
   onChange,
@@ -724,7 +796,8 @@ function TaskForm({
 }: {
   draft: TaskDraft;
   categories: Category[];
-  tags: Tag[];
+  dependencyOptions: Task[];
+  currentTaskId?: number;
   submitLabel: string;
   canDelete?: boolean;
   onChange: (draft: TaskDraft) => void;
@@ -836,14 +909,12 @@ function TaskForm({
         value={draft.start_window_at}
         onChange={(start_window_at) => onChange({ ...draft, start_window_at })}
       />
-      <div className="field">
-        <span>Tags</span>
-        <TagPicker
-          value={draft.tag_ids}
-          tags={tags}
-          onChange={(tag_ids) => onChange({ ...draft, tag_ids })}
-        />
-      </div>
+      <DependencyPicker
+        value={draft.dependency_ids}
+        tasks={dependencyOptions}
+        currentTaskId={currentTaskId}
+        onChange={(dependency_ids) => onChange({ ...draft, dependency_ids })}
+      />
       <div className="form-actions">
         {canDelete && onDelete && (
           <button className="danger" type="button" onClick={onDelete}>
@@ -937,20 +1008,27 @@ function TaskTable({
   tasks,
   categories,
   categoryFilter,
+  highlightedTaskId,
+  scrollToTaskId,
   onAdd,
   onEdit,
+  onHoverTask,
   onCategoryFilterChange,
 }: {
   tasks: Task[];
   categories: Category[];
   categoryFilter: number | null;
+  highlightedTaskId: number | null;
+  scrollToTaskId: number | null;
   onAdd: () => void;
   onEdit: (task: Task) => void;
+  onHoverTask: (taskId: number | null) => void;
   onCategoryFilterChange: (categoryId: number | null) => void;
 }) {
   const [sortKey, setSortKey] = useState<TaskSortKey>("urgency");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [urgencyDisplay, setUrgencyDisplay] = useState<"value" | "deadline">("value");
+  const [urgencyDisplay, setUrgencyDisplay] = useState<"value" | "deadline">("deadline");
+  const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
   const sorted = [...tasks].sort((a, b) => {
     const leftValue = a[sortKey];
     const rightValue = b[sortKey];
@@ -982,6 +1060,16 @@ function TaskTable({
       setSortDir("desc");
     }
   }
+
+  useEffect(() => {
+    if (scrollToTaskId === null) {
+      return;
+    }
+    rowRefs.current.get(scrollToTaskId)?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth",
+    });
+  }, [scrollToTaskId, sorted]);
 
   return (
     <div className="table-stack">
@@ -1029,9 +1117,24 @@ function TaskTable({
             </tr>
             {sorted.map((task) => (
               <tr
-                className={`task-row ${stripeByDate.get(dateStripeKey(task.deadline_at))}`}
+                className={[
+                  "task-row",
+                  stripeByDate.get(dateStripeKey(task.deadline_at)),
+                  highlightedTaskId === task.id ? "highlighted" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 key={task.id}
+                ref={(node) => {
+                  if (node) {
+                    rowRefs.current.set(task.id, node);
+                  } else {
+                    rowRefs.current.delete(task.id);
+                  }
+                }}
                 onClick={() => onEdit(task)}
+                onMouseEnter={() => onHoverTask(task.id)}
+                onMouseLeave={() => onHoverTask(null)}
               >
                 <td>{task.title}</td>
                 <td className="category-cell">{categoryName(task.category_id, categories)}</td>
@@ -1057,10 +1160,56 @@ function TaskTable({
   );
 }
 
-function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category[] }) {
+function MatrixView({
+  tasks,
+  categories,
+  highlightedTaskId,
+  onHoverTask,
+}: {
+  tasks: Task[];
+  categories: Category[];
+  highlightedTaskId: number | null;
+  onHoverTask: (taskId: number | null) => void;
+}) {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [matrixWidth, setMatrixWidth] = useState(0);
   const matrixRef = useRef<HTMLDivElement | null>(null);
+  const taskPoints = new Map(
+    tasks.map((task) => [
+      task.id,
+      {
+        x: matrixPercent(task.urgency),
+        y: matrixPercent(task.importance),
+      },
+    ]),
+  );
+  const dependencyArrows = tasks.flatMap((task) => {
+    const target = taskPoints.get(task.id);
+    if (!target) {
+      return [];
+    }
+    return task.dependency_ids
+      .map((dependencyId) => {
+        const source = taskPoints.get(dependencyId);
+        if (!source || (source.x === target.x && source.y === target.y)) {
+          return null;
+        }
+        const sourceY = 100 - source.y;
+        const targetY = 100 - target.y;
+        const dx = target.x - source.x;
+        const dy = targetY - sourceY;
+        const length = Math.hypot(dx, dy);
+        const offset = Math.min(2, length / 3);
+        return {
+          id: `${dependencyId}-${task.id}`,
+          x1: source.x + (dx / length) * offset,
+          y1: sourceY + (dy / length) * offset,
+          x2: target.x - (dx / length) * offset,
+          y2: targetY - (dy / length) * offset,
+        };
+      })
+      .filter((arrow): arrow is { id: string; x1: number; y1: number; x2: number; y2: number } => arrow !== null);
+  });
 
   useLayoutEffect(() => {
     if (!matrixRef.current) return;
@@ -1096,12 +1245,41 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
             {tick}
           </span>
         ))}
+        {dependencyArrows.length > 0 && (
+          <svg className="matrix-dependency-layer" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <defs>
+              <marker
+                id="dependency-arrowhead"
+                markerHeight="5"
+                markerWidth="5"
+                orient="auto"
+                refX="4.5"
+                refY="2.5"
+                viewBox="0 0 5 5"
+              >
+                <path d="M0,0 L5,2.5 L0,5 Z" />
+              </marker>
+            </defs>
+            {dependencyArrows.map((arrow) => (
+              <line
+                key={arrow.id}
+                x1={arrow.x1}
+                y1={arrow.y1}
+                x2={arrow.x2}
+                y2={arrow.y2}
+                markerEnd="url(#dependency-arrowhead)"
+              />
+            ))}
+          </svg>
+        )}
         {tasks.map((task) => {
           const isSelected = selectedTaskId === task.id;
+          const isHighlighted = highlightedTaskId === task.id;
           const taskColor = difficultyColor(task.difficulty);
           const taskUrgency = task.urgency;
-          const xPercent = matrixPercent(taskUrgency);
-          const yPercent = matrixPercent(task.importance);
+          const point = taskPoints.get(task.id);
+          const xPercent = point?.x ?? matrixPercent(taskUrgency);
+          const yPercent = point?.y ?? matrixPercent(task.importance);
           const estimatedPopupWidth = Math.min(
             420,
             Math.max(132, task.title.length * 6.2 + 18),
@@ -1114,6 +1292,7 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
               className={[
                 "matrix-task",
                 isSelected ? "selected" : "",
+                isHighlighted ? "highlighted" : "",
                 shouldExpandLeft ? "expand-left" : "",
                 shouldExpandUp ? "expand-metrics-up" : "",
               ]
@@ -1127,7 +1306,11 @@ function MatrixView({ tasks, categories }: { tasks: Task[]; categories: Category
                 left: `${xPercent}%`,
                 bottom: `${yPercent}%`,
               }}
-              onMouseLeave={() => setSelectedTaskId(null)}
+              onMouseEnter={() => onHoverTask(task.id)}
+              onMouseLeave={() => {
+                onHoverTask(null);
+                setSelectedTaskId(null);
+              }}
               key={task.id}
             >
               <span
@@ -1411,13 +1594,13 @@ function PulledTask({
 function DeclineEditor({
   session,
   categories,
-  tags,
+  dependencyOptions,
   onCancel,
   onSaved,
 }: {
   session: Session;
   categories: Category[];
-  tags: Tag[];
+  dependencyOptions: Task[];
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -1461,7 +1644,8 @@ function DeclineEditor({
         <TaskForm
           draft={draft}
           categories={categories}
-          tags={tags}
+          dependencyOptions={dependencyOptions}
+          currentTaskId={session.task.id}
           submitLabel="Save edit"
           canDelete
           onChange={setDraft}
@@ -1525,7 +1709,8 @@ function TaskModal({
   title,
   draft,
   categories,
-  tags,
+  dependencyOptions,
+  currentTaskId,
   submitLabel,
   error,
   canDelete,
@@ -1540,7 +1725,8 @@ function TaskModal({
   title: string;
   draft: TaskDraft;
   categories: Category[];
-  tags: Tag[];
+  dependencyOptions: Task[];
+  currentTaskId?: number;
   submitLabel: string;
   error: string;
   canDelete: boolean;
@@ -1565,7 +1751,8 @@ function TaskModal({
         <TaskForm
           draft={draft}
           categories={categories}
-          tags={tags}
+          dependencyOptions={dependencyOptions}
+          currentTaskId={currentTaskId}
           submitLabel={submitLabel}
           canDelete={canDelete}
           onChange={onChange}
@@ -2047,7 +2234,6 @@ function App() {
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
   const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [tags, setTags] = useState<Tag[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [draft, setDraft] = useState<TaskDraft>(emptyDraft);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -2059,20 +2245,20 @@ function App() {
   const [declineEditing, setDeclineEditing] = useState(false);
   const [error, setError] = useState("");
   const [taskModalError, setTaskModalError] = useState("");
+  const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
+  const [matrixHoveredTaskId, setMatrixHoveredTaskId] = useState<number | null>(null);
 
   async function refresh() {
-    const [active, archived, currentSession, nextCategories, nextTags] = await Promise.all([
+    const [active, archived, currentSession, nextCategories] = await Promise.all([
       api<Task[]>("/tasks?status=active"),
       api<Task[]>("/tasks?status=archived"),
       api<Session | null>("/session"),
       api<Category[]>("/categories"),
-      api<Tag[]>("/tags"),
     ]);
     setActiveTasks(active);
     setArchivedTasks(archived);
     setSession(currentSession);
     setCategories(nextCategories);
-    setTags(nextTags);
   }
 
   useEffect(() => {
@@ -2256,7 +2442,7 @@ function App() {
       <DeclineEditor
         session={session}
         categories={categories}
-        tags={tags}
+        dependencyOptions={activeTasks}
         onCancel={() => setDeclineEditing(false)}
         onSaved={async () => {
           setDeclineEditing(false);
@@ -2306,14 +2492,25 @@ function App() {
               tasks={filteredActiveTasks}
               categories={categories}
               categoryFilter={categoryFilter}
+              highlightedTaskId={hoveredTaskId}
+              scrollToTaskId={matrixHoveredTaskId}
               onAdd={openNewTaskModal}
               onEdit={openEditTaskModal}
+              onHoverTask={setHoveredTaskId}
               onCategoryFilterChange={setCategoryFilter}
             />
           </section>
 
           <section className="main-panel matrix-panel">
-            <MatrixView tasks={filteredActiveTasks} categories={categories} />
+            <MatrixView
+              tasks={filteredActiveTasks}
+              categories={categories}
+              highlightedTaskId={hoveredTaskId}
+              onHoverTask={(taskId) => {
+                setHoveredTaskId(taskId);
+                setMatrixHoveredTaskId(taskId);
+              }}
+            />
           </section>
         </section>
       ) : page === "archive" ? (
@@ -2343,7 +2540,8 @@ function App() {
           title={editingTask ? "Edit Task" : "New Task"}
           draft={draft}
           categories={categories}
-          tags={tags}
+          dependencyOptions={activeTasks}
+          currentTaskId={editingTask?.id}
           submitLabel={editingTask ? "Save" : "Add Task"}
           error={taskModalError}
           canDelete={editingTask?.status === "active"}

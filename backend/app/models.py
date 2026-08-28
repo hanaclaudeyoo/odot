@@ -17,7 +17,7 @@ class TaskBase(BaseModel):
     deadline_at: str | None = None
     start_window_at: str | None = None
     category_id: int | None = None
-    tag_ids: list[int] = Field(default_factory=list)
+    dependency_ids: list[int] = Field(default_factory=list)
 
     @field_validator("title")
     @classmethod
@@ -66,7 +66,7 @@ class TaskUpdate(BaseModel):
     deadline_at: str | None = None
     start_window_at: str | None = None
     category_id: int | None = None
-    tag_ids: list[int] | None = None
+    dependency_ids: list[int] | None = None
 
     @field_validator("title")
     @classmethod
@@ -98,12 +98,6 @@ class Task(TaskBase):
     archived_at: str | None = None
     actual_duration_seconds: int | None = None
     category_snapshot: str | None = None
-
-
-class Tag(BaseModel):
-    id: int
-    name: str
-    sort_order: int
 
 
 class CategoryBase(BaseModel):

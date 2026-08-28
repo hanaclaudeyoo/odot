@@ -43,8 +43,8 @@ def create_task(
     difficulty: float,
     category_id: int | None = None,
     deadline_at: str | None = None,
-    tag_ids: list[int] | None = None,
     start_window_at: str | None = None,
+    dependency_ids: list[int] | None = None,
 ):
     payload = {
         "title": title,
@@ -54,8 +54,6 @@ def create_task(
     }
     if category_id is not None:
         payload["category_id"] = category_id
-    if tag_ids is not None:
-        payload["tag_ids"] = tag_ids
     # Urgency is deadline-only now, so express the requested urgency as a deadline.
     if deadline_at is None:
         deadline_at = deadline_for_urgency(urgency, datetime.now(timezone.utc))
@@ -63,6 +61,8 @@ def create_task(
         payload["deadline_at"] = deadline_at
     if start_window_at is not None:
         payload["start_window_at"] = start_window_at
+    if dependency_ids is not None:
+        payload["dependency_ids"] = dependency_ids
     response = client.post(
         "/tasks",
         json=payload,
@@ -96,6 +96,17 @@ def test_create_task_accepts_decimal_axes(client):
 
     assert task["importance"] == 5.67
     assert task["difficulty"] == 8.91
+
+
+def test_tags_endpoint_and_tables_are_removed(client):
+    import app.database as database
+
+    assert client.get("/tags").status_code == 404
+    with database.connect() as db:
+        rows = db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tags', 'task_tags')"
+        ).fetchall()
+    assert rows == []
 
 
 def test_manual_urgency_is_rejected(client):
@@ -265,10 +276,6 @@ def test_archived_task_freezes_urgency_at_archive_time(client, monkeypatch):
     assert archived["urgency"] == 7
 
 
-def tag_ids_by_name(client: TestClient) -> dict[str, int]:
-    return {tag["name"]: tag["id"] for tag in client.get("/tags").json()}
-
-
 def archive_task(client: TestClient, task: dict) -> None:
     client.post(f"/tasks/{task['id']}/start")
     client.post(f"/tasks/{task['id']}/finish")
@@ -371,16 +378,6 @@ def test_restore_works_on_a_deleted_task(client):
     assert response.json()["status"] == "active"
 
 
-def test_restore_keeps_tags(client):
-    tags = tag_ids_by_name(client)
-    task = create_task(client, "Tagged archive", 5, 5, 3, tag_ids=[tags["Home"]])
-    archive_task(client, task)
-
-    response = client.post(f"/tasks/{task['id']}/restore")
-
-    assert response.json()["tag_ids"] == [tags["Home"]]
-
-
 def test_restore_rejects_an_active_task(client):
     task = create_task(client, "Already active", 5, 5, 3)
 
@@ -398,128 +395,11 @@ def test_purge_permanently_removes_an_archived_task(client):
     assert client.post(f"/tasks/{task['id']}/restore").status_code == 404
 
 
-def test_purge_removes_tag_assignments(client):
-    import app.database as database
-
-    tags = tag_ids_by_name(client)
-    task = create_task(client, "Tagged purge", 5, 5, 3, tag_ids=[tags["Home"]])
-    archive_task(client, task)
-
-    client.delete(f"/tasks/{task['id']}/purge")
-
-    with database.connect() as db:
-        remaining = db.execute(
-            "SELECT COUNT(*) AS count FROM task_tags WHERE task_id = ?", (task["id"],)
-        ).fetchone()["count"]
-    assert remaining == 0
-
-
 def test_purge_rejects_an_active_task(client):
     task = create_task(client, "Still active", 5, 5, 3)
 
     assert client.delete(f"/tasks/{task['id']}/purge").status_code == 404
     assert len(client.get("/tasks?status=active").json()) == 1
-
-
-def test_lists_seeded_tags(client):
-    tags = client.get("/tags").json()
-
-    assert [tag["name"] for tag in tags] == [
-        "Today",
-        "Sit Down",
-        "Home",
-        "Outside",
-        "Work Hours",
-        "Daylight",
-        "Contact",
-    ]
-    assert [tag["sort_order"] for tag in tags] == list(range(len(tags)))
-
-
-def test_seeding_removes_tags_dropped_from_the_seed_list(client):
-    import app.database as database
-
-    with database.connect() as db:
-        db.execute("INSERT INTO tags (name, sort_order) VALUES ('retired-tag', 99)")
-    assert "retired-tag" in tag_ids_by_name(client)
-
-    database.init_db()
-
-    assert "retired-tag" not in tag_ids_by_name(client)
-
-
-def test_task_defaults_to_no_tags(client):
-    task = create_task(client, "Untagged", 5, 5, 3)
-
-    assert task["tag_ids"] == []
-
-
-def test_create_task_with_tags(client):
-    tags = tag_ids_by_name(client)
-
-    task = create_task(client, "Tagged", 5, 5, 3, tag_ids=[tags["Today"], tags["Outside"]])
-
-    assert task["tag_ids"] == [tags["Today"], tags["Outside"]]
-    listed = client.get("/tasks?status=active").json()[0]
-    assert listed["tag_ids"] == [tags["Today"], tags["Outside"]]
-
-
-def test_update_replaces_tags(client):
-    tags = tag_ids_by_name(client)
-    task = create_task(client, "Retag me", 5, 5, 3, tag_ids=[tags["Today"]])
-
-    response = client.patch(f"/tasks/{task['id']}", json={"tag_ids": [tags["Sit Down"]]})
-
-    assert response.status_code == 200
-    assert response.json()["tag_ids"] == [tags["Sit Down"]]
-
-
-def test_update_can_clear_tags(client):
-    tags = tag_ids_by_name(client)
-    task = create_task(client, "Clear me", 5, 5, 3, tag_ids=[tags["Today"]])
-
-    response = client.patch(f"/tasks/{task['id']}", json={"tag_ids": []})
-
-    assert response.status_code == 200
-    assert response.json()["tag_ids"] == []
-
-
-def test_update_without_tag_ids_leaves_tags_untouched(client):
-    tags = tag_ids_by_name(client)
-    task = create_task(client, "Keep tags", 5, 5, 3, tag_ids=[tags["Home"]])
-
-    response = client.patch(f"/tasks/{task['id']}", json={"title": "Renamed"})
-
-    assert response.json()["title"] == "Renamed"
-    assert response.json()["tag_ids"] == [tags["Home"]]
-
-
-def test_unknown_tag_is_rejected(client):
-    task = create_task(client, "Bad tag", 5, 5, 3)
-
-    response = client.patch(f"/tasks/{task['id']}", json={"tag_ids": [9999]})
-
-    assert response.status_code == 404
-
-
-def test_duplicate_tag_ids_are_deduplicated(client):
-    tags = tag_ids_by_name(client)
-
-    task = create_task(
-        client, "Dupes", 5, 5, 3, tag_ids=[tags["Today"], tags["Today"], tags["Sit Down"]]
-    )
-
-    assert task["tag_ids"] == [tags["Today"], tags["Sit Down"]]
-
-
-def test_tags_are_returned_in_display_order(client):
-    tags = tag_ids_by_name(client)
-
-    task = create_task(
-        client, "Order", 5, 5, 3, tag_ids=[tags["Daylight"], tags["Today"], tags["Home"]]
-    )
-
-    assert task["tag_ids"] == [tags["Today"], tags["Home"], tags["Daylight"]]
 
 
 def test_lists_active_and_archived_tasks(client):
@@ -552,7 +432,7 @@ def test_delete_moves_active_task_to_archive_as_deleted(client):
 def test_pull_respects_quadrant_priority(client):
     create_task(client, "Low everything", 0, 0, 0)
     create_task(client, "Urgent only", 4.99, 10, 0)
-    create_task(client, "Important and urgent", 5, 5, 10)
+    create_task(client, "Important and urgent", 5, 5, 0)
 
     response = client.post("/tasks/pull", json={"energy_level": 0})
 
@@ -590,6 +470,16 @@ def test_low_energy_favors_easy_task_when_other_axes_match(client):
     assert response.json()["task"]["title"] == "Easy peer"
 
 
+def test_pull_excludes_tasks_harder_than_energy(client):
+    create_task(client, "Too hard", 10, 10, 6)
+    create_task(client, "Eligible", 4, 4, 5)
+
+    response = client.post("/tasks/pull", json={"energy_level": 5})
+
+    assert response.status_code == 200
+    assert response.json()["task"]["title"] == "Eligible"
+
+
 def test_pull_blocks_when_session_exists(client):
     create_task(client, "First", 5, 5, 3)
     create_task(client, "Second", 5, 5, 3)
@@ -625,6 +515,64 @@ def test_pull_category_filter_returns_404_when_no_candidates(client):
     )
 
     assert response.status_code == 404
+
+
+def test_create_and_update_task_dependencies(client):
+    dependency = create_task(client, "Dependency", 5, 5, 3)
+    task = create_task(client, "Dependent", 5, 5, 3, dependency_ids=[dependency["id"]])
+
+    assert task["dependency_ids"] == [dependency["id"]]
+
+    response = client.patch(f"/tasks/{task['id']}", json={"dependency_ids": []})
+
+    assert response.status_code == 200
+    assert response.json()["dependency_ids"] == []
+
+
+def test_task_cannot_depend_on_itself(client):
+    task = create_task(client, "Self", 5, 5, 3)
+
+    response = client.patch(f"/tasks/{task['id']}", json={"dependency_ids": [task["id"]]})
+
+    assert response.status_code == 422
+
+
+def test_unknown_dependency_is_rejected(client):
+    response = client.post(
+        "/tasks",
+        json={
+            "title": "Bad dependency",
+            "importance": 5,
+            "difficulty": 5,
+            "time_estimate_minutes": 15,
+            "dependency_ids": [9999],
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_pull_excludes_task_until_dependencies_are_removed(client):
+    dependency = create_task(client, "Do first", 1, 1, 1)
+    dependent = create_task(
+        client,
+        "Do second",
+        10,
+        10,
+        10,
+        dependency_ids=[dependency["id"]],
+    )
+
+    first_pull = client.post("/tasks/pull", json={"energy_level": 10})
+
+    assert first_pull.status_code == 200
+    assert first_pull.json()["task"]["id"] == dependency["id"]
+    client.post(f"/tasks/{dependency['id']}/finish")
+
+    second_pull = client.post("/tasks/pull", json={"energy_level": 10})
+
+    assert second_pull.status_code == 200
+    assert second_pull.json()["task"]["id"] == dependent["id"]
 
 
 def test_pull_excludes_tasks_before_start_window(client, monkeypatch):

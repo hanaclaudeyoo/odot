@@ -28,7 +28,7 @@ from app.database import database_path, init_db  # noqa: E402
 
 # Parents before children, so replaying the inserts in order satisfies foreign keys.
 # active_session is omitted: an in-progress pull is UI state, not data worth cloning.
-EXPORTED_TABLES = ("tags", "categories", "tasks", "task_tags")
+EXPORTED_TABLES = ("categories", "tasks", "task_dependencies")
 
 
 def connect(path: Path) -> sqlite3.Connection:
