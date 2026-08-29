@@ -674,6 +674,82 @@ h2 {
   gap: 6px;
 }
 
+.title-filter {
+  position: relative;
+}
+
+.title-filter-trigger {
+  background: #ffffff !important;
+  border-color: transparent !important;
+}
+
+.title-filter-trigger.active {
+  color: #176b87;
+}
+
+.title-filter-trigger:hover {
+  background: #eef4f7 !important;
+}
+
+.title-filter-popover {
+  background: #ffffff;
+  border: 1px solid #d9e1e8;
+  border-radius: 8px;
+  box-shadow: 0 14px 35px rgba(15, 23, 42, 0.16);
+  display: grid;
+  gap: 8px;
+  left: 0;
+  margin-top: 6px;
+  min-width: 260px;
+  padding: 10px;
+  position: absolute;
+  text-transform: none;
+  top: 100%;
+  z-index: 25;
+}
+
+.title-filter-popover input {
+  border: 1px solid #cbd5df;
+  border-radius: 6px;
+  font-size: 13px;
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
+.title-filter-popover input:focus {
+  border-color: #80bfd3;
+  outline: 0;
+}
+
+.title-filter-actions {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.title-filter-commit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.title-filter-actions button {
+  font-size: 12px;
+  font-weight: 400;
+  min-height: 28px;
+  padding: 4px 9px;
+}
+
+.title-filter-actions button:not(.secondary) {
+  background: #f8fafc;
+  border-color: #d9e1e8;
+  color: #27313f;
+}
+
+.title-filter-actions button:not(.secondary):hover,
+.title-filter-actions button.secondary:hover {
+  background: #eef4f7;
+}
+
 .axis-grid {
   display: grid;
   gap: 14px;

@@ -779,6 +779,82 @@ function CategoryFilterPicker({
   );
 }
 
+function TaskTitleFilter({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (query: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pendingQuery, setPendingQuery] = useState(value);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  function openPicker() {
+    setPendingQuery(value);
+    setOpen(true);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  function applySearch() {
+    onChange(pendingQuery.trim());
+    setOpen(false);
+  }
+
+  return (
+    <div className="title-filter">
+      <button
+        className={["header-label", "title-filter-trigger", value ? "active" : ""]
+          .filter(Boolean)
+          .join(" ")}
+        type="button"
+        onClick={openPicker}
+      >
+        Task
+      </button>
+      {open && (
+        <div className="title-filter-popover">
+          <input
+            ref={inputRef}
+            type="text"
+            value={pendingQuery}
+            onChange={(event) => setPendingQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                applySearch();
+              } else if (event.key === "Escape") {
+                setOpen(false);
+              }
+            }}
+            placeholder="Search task titles..."
+          />
+          <div className="title-filter-actions">
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                onChange("");
+                setPendingQuery("");
+                setOpen(false);
+              }}
+            >
+              Clear
+            </button>
+            <div className="title-filter-commit-actions">
+              <button className="secondary" type="button" onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" onClick={applySearch}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TaskForm({
   draft,
   categories,
@@ -1008,22 +1084,26 @@ function TaskTable({
   tasks,
   categories,
   categoryFilter,
+  titleFilter,
   highlightedTaskId,
   scrollToTaskId,
   onAdd,
   onEdit,
   onHoverTask,
   onCategoryFilterChange,
+  onTitleFilterChange,
 }: {
   tasks: Task[];
   categories: Category[];
   categoryFilter: number | null;
+  titleFilter: string;
   highlightedTaskId: number | null;
   scrollToTaskId: number | null;
   onAdd: () => void;
   onEdit: (task: Task) => void;
   onHoverTask: (taskId: number | null) => void;
   onCategoryFilterChange: (categoryId: number | null) => void;
+  onTitleFilterChange: (query: string) => void;
 }) {
   const [sortKey, setSortKey] = useState<TaskSortKey>("urgency");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -1078,7 +1158,7 @@ function TaskTable({
           <thead>
             <tr>
               <th>
-                <span className="header-label">Task</span>
+                <TaskTitleFilter value={titleFilter} onChange={onTitleFilterChange} />
               </th>
               <th>
                 <CategoryFilterPicker
@@ -2240,6 +2320,7 @@ function App() {
   const [energyLevel, setEnergyLevel] = useState(5);
   const [page, setPage] = useState<"tasks" | "archive" | "categories">("tasks");
   const [categoryFilter, setCategoryFilter] = useState<number | null>(null);
+  const [titleFilter, setTitleFilter] = useState("");
   const [navOpen, setNavOpen] = useState(false);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [declineEditing, setDeclineEditing] = useState(false);
@@ -2422,6 +2503,9 @@ function App() {
     if (categoryFilter === null) return true;
     if (task.category_id === null) return false;
     return descendantCategoryIds(categoryFilter, categories).has(task.category_id);
+  }).filter((task) => {
+    const query = titleFilter.trim().toLowerCase();
+    return query === "" || task.title.toLowerCase().includes(query);
   });
 
   async function finishTask() {
@@ -2492,12 +2576,14 @@ function App() {
               tasks={filteredActiveTasks}
               categories={categories}
               categoryFilter={categoryFilter}
+              titleFilter={titleFilter}
               highlightedTaskId={hoveredTaskId}
               scrollToTaskId={matrixHoveredTaskId}
               onAdd={openNewTaskModal}
               onEdit={openEditTaskModal}
               onHoverTask={setHoveredTaskId}
               onCategoryFilterChange={setCategoryFilter}
+              onTitleFilterChange={setTitleFilter}
             />
           </section>
 
