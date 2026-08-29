@@ -19,15 +19,18 @@ npm install --prefix frontend
 
 ## Launch Dev
 
-Start the backend API:
+Start both the backend API and frontend app:
+
+```sh
+npm run dev
+```
+
+This runs the backend API on `http://127.0.0.1:8000` and starts the Vite frontend. Stop both with `Ctrl-C`.
+
+You can still start them separately if needed:
 
 ```sh
 npm run backend:dev
-```
-
-Start the frontend app in another terminal:
-
-```sh
 npm run frontend:dev
 ```
 

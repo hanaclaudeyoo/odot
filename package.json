@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "dev": "scripts/dev.sh",
     "backend:dev": ".venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000",
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
