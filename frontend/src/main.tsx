@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { StrictMode, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Archive,
@@ -78,6 +78,8 @@ const emptyDraft: TaskDraft = {
 
 const axisTicks = [1, 2, 3, 4, 6, 7, 8, 9, 10];
 const API_BASE = "/api";
+// Roughly the size of the one-item task context menu, used to keep it inside the viewport.
+const contextMenuSize = { width: 150, height: 44 };
 
 function errorMessage(detail: unknown): string {
   if (typeof detail === "string") {
@@ -1089,6 +1091,7 @@ function TaskTable({
   scrollToTaskId,
   onAdd,
   onEdit,
+  onCopy,
   onHoverTask,
   onCategoryFilterChange,
   onTitleFilterChange,
@@ -1101,6 +1104,7 @@ function TaskTable({
   scrollToTaskId: number | null;
   onAdd: () => void;
   onEdit: (task: Task) => void;
+  onCopy: (task: Task) => void;
   onHoverTask: (taskId: number | null) => void;
   onCategoryFilterChange: (categoryId: number | null) => void;
   onTitleFilterChange: (query: string) => void;
@@ -1108,7 +1112,50 @@ function TaskTable({
   const [sortKey, setSortKey] = useState<TaskSortKey>("urgency");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [urgencyDisplay, setUrgencyDisplay] = useState<"value" | "deadline">("deadline");
+  const [contextMenu, setContextMenu] = useState<{ task: Task; top: number; left: number } | null>(
+    null,
+  );
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!contextMenuRef.current?.contains(event.target as Node)) {
+        setContextMenu(null);
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    }
+    function close() {
+      setContextMenu(null);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [contextMenu]);
+
+  function openContextMenu(event: ReactMouseEvent<HTMLTableRowElement>, task: Task) {
+    event.preventDefault();
+    // Keep the menu on screen when the click lands near the right or bottom edge.
+    setContextMenu({
+      task,
+      top: Math.min(event.clientY, window.innerHeight - contextMenuSize.height),
+      left: Math.min(event.clientX, window.innerWidth - contextMenuSize.width),
+    });
+  }
   const sorted = [...tasks].sort((a, b) => {
     const leftValue = a[sortKey];
     const rightValue = b[sortKey];
@@ -1213,6 +1260,7 @@ function TaskTable({
                   }
                 }}
                 onClick={() => onEdit(task)}
+                onContextMenu={(event) => openContextMenu(event, task)}
                 onMouseEnter={() => onHoverTask(task.id)}
                 onMouseLeave={() => onHoverTask(null)}
               >
@@ -1236,6 +1284,28 @@ function TaskTable({
         </table>
       </div>
       {tasks.length === 0 && <p className="empty">No active tasks.</p>}
+      {contextMenu && (
+        // Rendered outside the table so clicking an item cannot bubble into the row's
+        // onClick and open the edit modal instead.
+        <div
+          className="row-menu-popover"
+          role="menu"
+          ref={contextMenuRef}
+          style={{ top: contextMenu.top, left: contextMenu.left }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const { task } = contextMenu;
+              setContextMenu(null);
+              onCopy(task);
+            }}
+          >
+            Create Copy
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2419,6 +2489,14 @@ function App() {
     setTaskModalOpen(true);
   }
 
+  function openCopyTaskModal(task: Task) {
+    // A copy is an unsaved new task, so leave editingTask null and prefill the draft.
+    setEditingTask(null);
+    setDraft({ ...draftFromTask(task), title: `${task.title} copy` });
+    setTaskModalError("");
+    setTaskModalOpen(true);
+  }
+
   function closeTaskModal() {
     setTaskModalOpen(false);
     setEditingTask(null);
@@ -2581,6 +2659,7 @@ function App() {
               scrollToTaskId={matrixHoveredTaskId}
               onAdd={openNewTaskModal}
               onEdit={openEditTaskModal}
+              onCopy={openCopyTaskModal}
               onHoverTask={setHoveredTaskId}
               onCategoryFilterChange={setCategoryFilter}
               onTitleFilterChange={setTitleFilter}
